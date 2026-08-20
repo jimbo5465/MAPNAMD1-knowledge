@@ -55,6 +55,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -63,6 +64,32 @@ from db.init import init_db
 from handlers.knowledge import get_knowledge_conversation_handler
 from handlers.registration import get_registration_conversation_handler
 from handlers.observations import get_observations_conversation_handler
+from utils.busy_lock import is_busy
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# هندلر «در حال پردازش» — وقتی AI مشغول است، کاربر پیام/دکمه بفرستد
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def busy_guard_handler(update: Update, context) -> None:
+    """اگر کاربر در حال پردازش AI است، پیام کوتاه بده. در غیر این صورت هیچ کاری نکن."""
+    user = update.effective_user
+    if not user or not is_busy(user.id):
+        return
+
+    # پاسخ کوتاه — کاربر بداند ربات مشغول است
+    try:
+        if update.callback_query:
+            await update.callback_query.answer(
+                "⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید.",
+                show_alert=False,
+            )
+        elif update.message:
+            await update.message.reply_text(
+                "⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید.",
+            )
+    except Exception:
+        logger.exception("خطا در ارسال پیام busy")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -193,21 +220,24 @@ def main() -> None:
 
     app.add_error_handler(global_error_handler)
 
+    # قفل «در حال پردازش» — اولین هندلر (بلوک همه چیز وقتی AI مشغول است)
+    app.add_handler(TypeHandler(Update, busy_guard_handler), group=0)
+    logger.info("  ✓ هندلر قفل «در حال پردازش» ثبت شد")
     # ثبت‌نام کاربر (اولویت بالا — قبل از همه)
-    app.add_handler(get_registration_conversation_handler())
+    app.add_handler(get_registration_conversation_handler(), group=1)
     logger.info("  ✓ ConversationHandler ثبت‌نام کاربر ثبت شد")
 
     # ثبت مشاهده
-    app.add_handler(get_observations_conversation_handler())
+    app.add_handler(get_observations_conversation_handler(), group=1)
     logger.info("  ✓ ConversationHandler ثبت مشاهده ثبت شد")
 
     # ثبت دانش/تجربه سازمانی
-    app.add_handler(get_knowledge_conversation_handler())
+    app.add_handler(get_knowledge_conversation_handler(), group=1)
     logger.info("  ✓ ConversationHandler ثبت دانش/تجربه ثبت شد")
 
     # منوی اصلی
-    app.add_handler(CallbackQueryHandler(menu_main_handler, pattern=r"^menu:main$"))
-    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(menu_main_handler, pattern=r"^menu:main$"), group=1)
+    app.add_handler(CommandHandler("help", help_command), group=1)
     logger.info("  ✓ CommandHandlers ثبت شدند (/start /cancel /help /menu)")
 
     # fallback
@@ -215,10 +245,12 @@ def main() -> None:
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             unknown_message_handler,
-        )
+        ),
+        group=1,
     )
     app.add_handler(
-        CallbackQueryHandler(unknown_callback_handler)
+        CallbackQueryHandler(unknown_callback_handler),
+        group=1,
     )
     logger.info("  ✓ Fallback handlers ثبت شدند")
 

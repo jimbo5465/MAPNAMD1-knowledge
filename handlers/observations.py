@@ -31,6 +31,7 @@ from db.models import (
 from handlers.auth import require_registration
 from handlers.keyboards import back_to_main_keyboard, main_menu_keyboard
 from handlers.knowledge import _transcribe_voice
+from utils.busy_lock import clear_busy, is_busy, set_busy
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +189,19 @@ async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_T
 @require_registration
 async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """دریافت ویس برای مشاهده — متن ترنسکرایب‌شده را نشان می‌دهد و تأیید می‌گیرد."""
-    text = await _transcribe_voice(update, context)
+    user = update.effective_user
+    if user and is_busy(user.id):
+        await update.message.reply_text(
+            "⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید."
+        )
+        return OBS_CONTENT
+    if user:
+        set_busy(user.id)
+    try:
+        text = await _transcribe_voice(update, context)
+    finally:
+        if user:
+            clear_busy(user.id)
     if text is None:
         return OBS_CONTENT
 

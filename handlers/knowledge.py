@@ -59,6 +59,7 @@ from db.models import (
 )
 from handlers.auth import require_registration
 from handlers.keyboards import back_to_main_keyboard, main_menu_keyboard
+from utils.busy_lock import clear_busy, is_busy, set_busy
 from utils.dates import validate_jalali_date_str
 from engine.knowledge_ai import extract_fields, FIELD_SCHEMAS, TYPE_LABELS
 from engine.knowledge_draft import build_report, render_text
@@ -117,6 +118,45 @@ def _input_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     if pending:
         return pending
     return (update.message.text or "") if update.message else ""
+
+
+# ── قفل «در حال پردازش» هوش مصنوعی ──────────────────────────────────────────
+# اگر کاربر هنگام کار AI پیام/دکمه بفرستد، خطای تداخل می‌گیرد. این قفل باعث می‌شود
+# پیام «⏳ در حال بررسی...» ببیند و بداند ربات مشغول است.
+
+def _busy_ai(func):
+    """دکوراتور async: قبل از فراخوانی تابع قفل می‌گذارد، بعد پاک می‌کند.
+    اگر کاربر قبلاً در حال پردازش باشد (قفل قبلی فعال)، پیام ⏳ می‌گیرد.
+    """
+    import functools
+
+    @functools.wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        tid = user.id if user else None
+        if tid:
+            if is_busy(tid):
+                # کاربر هنوز مشغول است — پیام بده و از ادامه جلوگیری کن
+                try:
+                    if update.callback_query:
+                        await update.callback_query.answer(
+                            "⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید.",
+                            show_alert=True,
+                        )
+                    elif update.message:
+                        await update.message.reply_text(
+                            "⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید.",
+                        )
+                except Exception:
+                    logger.exception("خطا در ارسال پیام busy")
+                return ConversationHandler.END
+            set_busy(tid)
+        try:
+            return await func(update, context, *args, **kwargs)
+        finally:
+            if tid:
+                clear_busy(tid)
+    return wrapper
 
 
 # ── تبدیل گفتار به متن (STT) — Groq Whisper ──────────────────────────────────
@@ -848,6 +888,7 @@ async def kn_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return KN_DESCRIPTION
 
 
+@_busy_ai
 async def kn_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """شرح آزاد ← استخراج با AI ← [تأیید طبقه‌بندی] ← پرسش فیلدهای ناقص."""
     desc = _clean_text(_input_text(update, context), _MAX_DESC)
@@ -932,6 +973,7 @@ async def kn_type_keep(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
 
+@_busy_ai
 async def kn_type_switch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """callback_data: kn_type_switch:<type> — تغییر نوع بر اساس پیشنهاد AI و استخراج مجدد."""
     try:
@@ -1365,6 +1407,7 @@ async def _ask_first_interview_question(
     )
 
 
+@_busy_ai
 async def kn_interview_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """callback_data: kn_interview:start — شروع مصاحبه + اولین سؤال AI."""
     try:
@@ -1392,6 +1435,7 @@ async def kn_interview_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
 
+@_busy_ai
 async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """دریافت پیام متنی در حلقهٔ مصاحبه."""
     from engine.knowledge_interview import interview_next_turn
@@ -1481,6 +1525,7 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
         return KN_INTERVIEW_LOOP
 
 
+@_busy_ai
 async def kn_interview_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """callback_data: kn_interview:done — پایان زودهنگام توسط کاربر."""
     try:
@@ -1500,6 +1545,15 @@ async def _final_assemble_and_preview(
     """
     پاس نهایی polish با AI + ساخت گزارش + ذخیره draft + رفتن به KN_PREVIEW.
     """
+    # قفل «در حال پردازش» — دستی (چون update نداریم)
+    tid = None
+    if context.user_data:
+        tid = context.user_data.get("_chat_id")
+    if tid is None and context._chat_id:  # noqa: SLF001 — دسترسی داخلی PTB
+        tid = context._chat_id  # noqa: SLF001
+    if tid:
+        set_busy(tid)
+
     try:
         from engine.knowledge_interview import polish_dana_draft
 
@@ -1564,6 +1618,9 @@ async def _final_assemble_and_preview(
         logger.exception("خطا در _final_assemble_and_preview")
         await msg.reply_text("❌ خطا در ساخت فرم نهایی.")
         return ConversationHandler.END
+    finally:
+        if tid:
+            clear_busy(tid)
 
 
 async def kn_final_assemble_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
