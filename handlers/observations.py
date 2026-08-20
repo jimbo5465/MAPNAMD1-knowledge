@@ -26,12 +26,19 @@ from db.models import (
     get_observation_by_id,
     list_observation_attachments,
     list_observations_by_user,
+    search_observations,
     update_observation,
 )
 from handlers.auth import require_registration
 from handlers.keyboards import back_to_main_keyboard, main_menu_keyboard
 from handlers.knowledge import _transcribe_voice
 from utils.busy_lock import clear_busy, is_busy, set_busy
+from utils.dates import (
+    gregorian_to_jalali_display,
+    jalali_to_gregorian,
+    validate_jalali_date_str,
+)
+import jdatetime
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +49,11 @@ logger = logging.getLogger(__name__)
     OBS_EDIT_CHOICE,   # 2 — انتخاب جایگزین/افزودن برای اصلاح
     OBS_ATTACHMENTS,   # 3 — دریافت پیوست‌ها
     OBS_EXTEND,        # 4 — افزودن مطلب به مشاهده موجود
-) = range(5)
+    OBS_TITLE,         # 5 — دریافت عنوان
+    OBS_TAGS,          # 6 — دریافت هشتگ‌ها (اختیاری)
+    OBS_DATE,          # 7 — دریافت تاریخ (اختیاری)
+    OBS_SEARCH,        # 8 — دریافت عبارت جستجو
+) = range(9)
 
 _OBS_TMP_DIR = "/tmp/welderbot_obs_attachments"
 
@@ -58,23 +69,21 @@ def _status_label(status: str) -> str:
 
 
 def _obs_list_keyboard(obs_list: list[dict]) -> InlineKeyboardMarkup:
-    """دکمه‌های هر مشاهده برای انتخاب."""
     rows = []
     for obs in obs_list[:10]:
+        title = obs.get("title") or (obs.get("content") or "")[:40]
         snippet = (obs.get("content") or "")[:40]
+        label = f"#{obs['id']} — {title[:35]}"
         rows.append([
-            InlineKeyboardButton(
-                f"#{obs['id']} — {snippet}",
-                callback_data=f"obs:view:{obs['id']}",
-            )
+            InlineKeyboardButton(label, callback_data=f"obs:view:{obs['id']}")
         ])
     rows.append([InlineKeyboardButton("➕ مشاهده جدید", callback_data="obs:new")])
+    rows.append([InlineKeyboardButton("🔍 جستجو", callback_data="obs:search")])
     rows.append([InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
 def _obs_view_keyboard(obs: dict) -> InlineKeyboardMarkup:
-    """دکمه‌های عملیات روی یک مشاهده."""
     rows = []
     if obs.get("status") in ("raw", "maturing"):
         rows.append([InlineKeyboardButton("✏️ افزودن مطلب", callback_data=f"obs:extend:{obs['id']}")])
@@ -87,7 +96,6 @@ def _obs_view_keyboard(obs: dict) -> InlineKeyboardMarkup:
 
 
 def _attachments_confirm_keyboard(obs_id: int) -> InlineKeyboardMarkup:
-    """دکمه‌های بعد از ذخیره متن: پیوست یا تمام."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🖼️ افزودن عکس", callback_data=f"obs:add_photo:{obs_id}")],
         [InlineKeyboardButton("📎 افزودن فایل (PDF/...)", callback_data=f"obs:add_file:{obs_id}")],
@@ -96,7 +104,6 @@ def _attachments_confirm_keyboard(obs_id: int) -> InlineKeyboardMarkup:
 
 
 def _voice_confirm_keyboard(obs_id: int | None) -> InlineKeyboardMarkup:
-    """دکمه‌های تأیید/اصلاح متن ترنسکرایب‌شده."""
     buttons = [
         [InlineKeyboardButton("✏️ اصلاح متن", callback_data="obs:edit_voice")],
         [InlineKeyboardButton("✅ تأیید و ذخیره", callback_data="obs:confirm_voice")],
@@ -110,6 +117,21 @@ def _edit_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔁 جایگزین متن قبلی شود", callback_data="obs:edit_replace")],
         [InlineKeyboardButton("➕ به متن قبلی اضافه شود", callback_data="obs:edit_append")],
+    ])
+
+
+def _search_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 بر اساس عنوان/متن", callback_data="obs:search_keyword")],
+        [InlineKeyboardButton("# بر اساس هشتگ", callback_data="obs:search_hashtag")],
+        [InlineKeyboardButton("📅 بر اساس تاریخ", callback_data="obs:search_date")],
+        [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
+    ])
+
+
+def _skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏭ رد کردن", callback_data="obs:skip")],
     ])
 
 
@@ -128,7 +150,7 @@ async def obs_new_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "📓 *ثبت مشاهده جدید*\n\n"
         "مشاهده‌ی خود را بنویسید، ویس بفرستید، یا عکس/فایل ضمیمه کنید.\n"
         "🎙️ *راهنما:* فارسی صحبت کنید — صدای شما توسط هوش مصنوعی به متن تبدیل می‌شود.\n\n"
-        "پس از ثبت، می‌توانید پیوست هم اضافه کنید.",
+        "پس از ثبت، عنوان، هشتگ و تاریخ را هم وارد می‌کنید.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🏠 انصراف", callback_data="menu:main")],
@@ -152,7 +174,7 @@ async def obs_content_received(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
-    """ذخیره مشاهده در DB و نمایش پیام تأیید + گزینه پیوست."""
+    """ذخیره مشاهده در DB و رفتن به مرحلهٔ عنوان."""
     user = update.effective_user
     if not user:
         return ConversationHandler.END
@@ -173,20 +195,174 @@ async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_T
 
     context.user_data["obs_saved_id"] = obs_id
 
-    # effective_message هم برای پیام عادی و هم برای callback query کار می‌کند
+    # مرحلهٔ بعد: عنوان
     target = update.effective_message
     if target is None:
-        logger.error("پیام مؤثر یافت نشد — نمی‌توان تأیید را ارسال کرد")
+        return ConversationHandler.END
+    await target.reply_text(
+        f"✅ متن مشاهده ذخیره شد.\n\n"
+        f"📝 حالا *عنوان* کوتاهی برای این مشاهده وارد کنید:\n"
+        f"مثلاً: «نقص در شیرهای اطمینان واحد ۳»",
+        parse_mode="Markdown",
+    )
+    return OBS_TITLE
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# عنوان
+# ══════════════════════════════════════════════════════════════════════════════
+
+@require_registration
+async def obs_title_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت عنوان مشاهده."""
+    title = (update.message.text or "").strip()
+    if not title:
+        await update.message.reply_text("❌ عنوان خالی است. یک عنوان کوتاه وارد کنید:")
+        return OBS_TITLE
+    obs_id = context.user_data.get("obs_saved_id")
+    if obs_id:
+        update_observation(obs_id, title=title)
+    context.user_data["obs_title"] = title
+
+    await update.message.reply_text(
+        "✅ عنوان ثبت شد.\n\n"
+        "#️⃣ *هشتگ‌ها* (اختیاری):\n"
+        "هشتگ‌ها را با فاصله بفرستید. مثال: `نقص فنی شیرآلات واحد۳`\n"
+        "یا رد کنید.",
+        parse_mode="Markdown",
+        reply_markup=_skip_keyboard(),
+    )
+    return OBS_TAGS
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# هشتگ‌ها (اختیاری)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@require_registration
+async def obs_tags_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت هشتگ‌ها."""
+    raw = (update.message.text or "").strip()
+    tags = [t.strip() for t in raw.replace("،", " ").replace("#", "").split() if t.strip()]
+    obs_id = context.user_data.get("obs_saved_id")
+    if obs_id and tags:
+        update_observation(obs_id, tags=tags)
+    context.user_data["obs_tags"] = tags
+
+    now_str = _today_jalali()
+    await update.message.reply_text(
+        f"✅ هشتگ‌ها ثبت شد: {' '.join('#' + t for t in tags)}\n\n"
+        f"📅 *تاریخ مشاهده* (اختیاری):\n"
+        f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، یا رد کنید (پیش‌فرض: {now_str}).",
+        parse_mode="Markdown",
+        reply_markup=_skip_keyboard(),
+    )
+    return OBS_DATE
+
+
+@require_registration
+async def obs_tags_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """رد هشتگ‌ها."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["obs_tags"] = []
+    now_str = _today_jalali()
+    await query.edit_message_text(
+        "⏭ هشتگ ثبت نشد.\n\n"
+        f"📅 *تاریخ مشاهده* (اختیاری):\n"
+        f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، یا رد کنید (پیش‌فرض: {now_str}).",
+        parse_mode="Markdown",
+        reply_markup=_skip_keyboard(),
+    )
+    return OBS_DATE
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# تاریخ (اختیاری)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _today_jalali() -> str:
+    """تاریخ امروز به فرمت جلالی YYYY/MM/DD."""
+    import jdatetime
+    return jdatetime.date.today().strftime("%Y/%m/%d")
+
+
+@require_registration
+async def obs_date_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت تاریخ مشاهده."""
+    raw = (update.message.text or "").strip()
+    valid, err = validate_jalali_date_str(raw)
+    if not valid:
+        await update.message.reply_text(
+            f"❌ {err}\nفرمت صحیح: `1402/12/15` — دوباره وارد کنید یا رد کنید.",
+            parse_mode="Markdown",
+            reply_markup=_skip_keyboard(),
+        )
+        return OBS_DATE
+
+    # تبدیل به میلادی برای ذخیره
+    greg_date = jalali_to_gregorian(raw)
+    obs_id = context.user_data.get("obs_saved_id")
+    if obs_id:
+        update_observation(obs_id, obs_date=greg_date)
+    context.user_data["obs_date_jalali"] = raw
+
+    return await _obs_final_confirm(update, context)
+
+
+@require_registration
+async def obs_date_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """رد تاریخ — استفاده از تاریخ امروز."""
+    query = update.callback_query
+    await query.answer()
+    now_str = _today_jalali()
+    greg_date = jalali_to_gregorian(now_str)
+    obs_id = context.user_data.get("obs_saved_id")
+    if obs_id:
+        update_observation(obs_id, obs_date=greg_date)
+    context.user_data["obs_date_jalali"] = now_str
+    return await _obs_final_confirm(update, context)
+
+
+async def _obs_final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """نمایش خلاصه و ذخیره نهایی + گزینه پیوست."""
+    obs_id = context.user_data.get("obs_saved_id")
+    title = context.user_data.get("obs_title", "—")
+    content = _get_content_from_context(context)
+    tags = context.user_data.get("obs_tags", [])
+    date_str = context.user_data.get("obs_date_jalali", _today_jalali())
+
+    if not obs_id:
+        return ConversationHandler.END
+
+    tag_line = " ".join("#" + t for t in tags) if tags else "—"
+
+    target = update.effective_message
+    if target is None:
         return ConversationHandler.END
 
     await target.reply_text(
-        f"✅ *مشاهده ثبت شد* (#{obs_id})\n\n"
-        f"_{text[:200]}_\n\n"
+        f"✅ *مشاهده کامل ثبت شد*\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"📝 *عنوان:* {title}\n"
+        f"📅 *تاریخ:* {date_str}\n"
+        f"#️⃣ *هشتگ‌ها:* {tag_line}\n\n"
+        f"_{content[:200]}_\n\n"
         "آیا می‌خواهید ضمیمه‌ای (عکس، PDF، فایل) اضافه کنید؟",
         parse_mode="Markdown",
         reply_markup=_attachments_confirm_keyboard(obs_id),
     )
     return OBS_ATTACHMENTS
+
+
+def _get_content_from_context(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """برگرداندن محتوای مشاهده از context یا DB."""
+    obs_id = context.user_data.get("obs_saved_id")
+    if obs_id:
+        obs = get_observation_by_id(obs_id)
+        if obs:
+            return obs.get("content", "")
+    return ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -198,9 +374,7 @@ async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """دریافت ویس برای مشاهده — متن ترنسکرایب‌شده را نشان می‌دهد و تأیید می‌گیرد."""
     user = update.effective_user
     if user and is_busy(user.id):
-        await update.message.reply_text(
-            "⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید."
-        )
+        await update.message.reply_text("⏳ هوش مصنوعی در حال بررسی است... لطفاً کمی صبر کنید.")
         return OBS_CONTENT
     if user:
         set_busy(user.id)
@@ -225,7 +399,6 @@ async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @require_registration
 async def obs_confirm_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """تأیید متن ترنسکرایب‌شده ← ذخیره مستقیم."""
     query = update.callback_query
     await query.answer()
     text = context.user_data.get("obs_voice_text", "")
@@ -237,18 +410,14 @@ async def obs_confirm_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @require_registration
 async def obs_edit_voice_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """شروع ویرایش متن ترنسکرایب‌شده."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
-        "✏️ متن اصلاح‌شده را بنویسید:",
-    )
-    return OBS_CONFIRM_VOICE  # next text message will hit obs_edit_voice_text
+    await query.edit_message_text("✏️ متن اصلاح‌شده را بنویسید:")
+    return OBS_CONFIRM_VOICE
 
 
 @require_registration
 async def obs_edit_voice_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """دریافت متن اصلاح‌شده — سؤال جایگزین یا افزودن."""
     corrected = (update.message.text or "").strip()
     if not corrected:
         await update.message.reply_text("❌ متن خالی است. دوباره بنویسید:")
@@ -267,7 +436,6 @@ async def obs_edit_voice_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @require_registration
 async def obs_edit_replace(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """جایگزینی متن تشخیص‌داده‌شده با متن اصلاحی."""
     query = update.callback_query
     await query.answer()
     corrected = context.user_data.get("obs_edited_text", "")
@@ -280,7 +448,6 @@ async def obs_edit_replace(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @require_registration
 async def obs_edit_append(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """افزودن متن اصلاحی به تشخیص داده‌شده."""
     query = update.callback_query
     await query.answer()
     original = context.user_data.get("obs_voice_text", "")
@@ -296,7 +463,6 @@ async def obs_edit_append(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 @require_registration
 async def obs_add_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """شروع افزودن عکس به مشاهده."""
     query = update.callback_query
     await query.answer()
     obs_id = int((query.data or "").split(":")[2])
@@ -312,7 +478,6 @@ async def obs_add_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @require_registration
 async def obs_add_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """شروع افزودن فایل (PDF/...) به مشاهده."""
     query = update.callback_query
     await query.answer()
     obs_id = int((query.data or "").split(":")[2])
@@ -328,20 +493,17 @@ async def obs_add_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @require_registration
 async def obs_attachment_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """دریافت عکس/فایل برای پیوست به مشاهده."""
     obs_id = context.user_data.get("obs_attach_obs_id") or context.user_data.get("obs_saved_id")
     if not obs_id:
         await update.message.reply_text("❌ شناسه مشاهده یافت نشد. دوباره /start بزنید.")
         return OBS_ATTACHMENTS
 
-    # تشخیص نوع فایل
     msg = update.message
     file_id = None
     file_name = None
     mime_type = None
 
     if msg.photo:
-        # عکس — آخرین (بزرگترین) سایز
         file_id = msg.photo[-1].file_id
         file_name = f"photo_{file_id[:12]}.jpg"
         mime_type = "image/jpeg"
@@ -354,13 +516,11 @@ async def obs_attachment_received(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ فقط عکس و فایل پشتیبانی می‌شود. دوباره بفرستید:")
         return OBS_ATTACHMENTS
 
-    # دانلود فایل
     try:
         file = await context.bot.get_file(file_id)
         os.makedirs(_OBS_TMP_DIR, exist_ok=True)
         obs_dir = os.path.join(config.OBS_ATTACH_PATH, str(obs_id))
         os.makedirs(obs_dir, exist_ok=True)
-        # جلوگیری از overwrite
         base, ext = os.path.splitext(file_name or "file")
         dest = os.path.join(obs_dir, file_name or f"attachment_{file_id[:12]}")
         counter = 1
@@ -371,7 +531,6 @@ async def obs_attachment_received(update: Update, context: ContextTypes.DEFAULT_
         await file.download_to_drive(dest)
         file_size = os.path.getsize(dest)
 
-        # ثبت در DB
         add_observation_attachment(
             observation_id=obs_id,
             file_path=dest,
@@ -422,10 +581,18 @@ async def obs_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     lines = [f"📂 *مشاهدات شما* ({len(obs_list)} مورد):\n"]
     for obs in obs_list[:10]:
-        snippet = (obs.get("content") or "")[:60].replace("\n", " ")
+        title = obs.get("title") or (obs.get("content") or "")[:40]
+        snippet = (obs.get("content") or "")[:50].replace("\n", " ")
         att_count = len(list_observation_attachments(obs["id"]))
         att_label = f" 📎{att_count}" if att_count else ""
-        lines.append(f"• #{obs['id']} — {snippet}...\n   {_status_label(obs['status'])}{att_label}")
+        # تاریخ
+        date_str = ""
+        if obs.get("obs_date"):
+            try:
+                date_str = f" | {gregorian_to_jalali_display(obs['obs_date'])}"
+            except Exception:
+                pass
+        lines.append(f"• #{obs['id']} — *{title[:35]}*{date_str}\n   {_status_label(obs['status'])}{att_label}")
 
     await query.edit_message_text(
         "\n".join(lines),
@@ -441,7 +608,6 @@ async def obs_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @require_registration
 async def obs_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """نمایش جزئیات یک مشاهده با پیوست‌ها."""
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -452,11 +618,19 @@ async def obs_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text("⚠️ مشاهده یافت نشد.", reply_markup=back_to_main_keyboard())
         return ConversationHandler.END
 
-    created = obs.get("created_at", "")
-    try:
-        created_fa = created[:16].replace("T", " ")
-    except Exception:
-        created_fa = created
+    # تاریخ
+    date_display = ""
+    if obs.get("obs_date"):
+        try:
+            date_display = f"📅 {gregorian_to_jalali_display(obs['obs_date'])}\n"
+        except Exception:
+            pass
+
+    # هشتگ‌ها
+    tags = obs.get("tags") or "[]"
+    import json
+    tag_list = json.loads(tags) if isinstance(tags, str) else (tags or [])
+    tag_line = " ".join("#" + t for t in tag_list) if tag_list else ""
 
     # پیوست‌ها
     attachments = list_observation_attachments(obs_id)
@@ -470,14 +644,22 @@ async def obs_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             size = a.get("file_size") or 0
             size_str = f" ({size // 1024}KB)" if size > 0 else ""
             att_lines.append(f"  {icon} {name}{size_str}")
-    else:
-        att_lines.append("\n_بدون پیوست_")
+
+    title = obs.get("title") or "—"
+    content = obs.get("content") or ""
+    created = obs.get("created_at", "")
+    try:
+        created_fa = created[:16].replace("T", " ")
+    except Exception:
+        created_fa = created
 
     text = (
-        f"📓 *مشاهده #{obs_id}*\n"
+        f"📓 *#{obs_id} — {title}*\n"
         f"وضعیت: {_status_label(obs['status'])}\n"
-        f"زمان: {created_fa}\n\n"
-        f"{obs.get('content')}"
+        f"{date_display}"
+        f"زمان ثبت: {created_fa}\n"
+        + (f"*{tag_line}*\n" if tag_line else "")
+        + f"\n{content}"
         + "\n".join(att_lines)
     )
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=_obs_view_keyboard(obs))
@@ -490,7 +672,6 @@ async def obs_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 @require_registration
 async def obs_extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """شروع افزودن مطلب به مشاهده."""
     query = update.callback_query
     await query.answer()
     obs_id = int((query.data or "").split(":")[2])
@@ -515,7 +696,6 @@ async def obs_extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @require_registration
 async def obs_extend_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """دریافت مطلب جدید برای افزودن به مشاهده."""
     obs_id = context.user_data.get("obs_extend_id")
     if not obs_id:
         return ConversationHandler.END
@@ -550,12 +730,152 @@ async def obs_extend_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# جستجو
+# ══════════════════════════════════════════════════════════════════════════════
+
+@require_registration
+async def obs_search_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """نمایش منوی جستجو."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "🔍 *جستجو در مشاهدات*\n\n"
+        "بر اساس کدام معیار جستجو کنم؟",
+        parse_mode="Markdown",
+        reply_markup=_search_keyboard(),
+    )
+    return ConversationHandler.END
+
+
+@require_registration
+async def obs_search_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """شروع جستجوی متنی."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["obs_search_mode"] = "keyword"
+    await query.edit_message_text(
+        "🔍 *جستجوی متنی*\n\n"
+        "عبارت مورد نظر را بنویسید — در عنوان و متن مشاهده جستجو می‌شود:\n"
+        "مثال: `شیر اطمینان`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
+        ]),
+    )
+    return OBS_SEARCH
+
+
+@require_registration
+async def obs_search_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """شروع جستجوی هشتگ."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["obs_search_mode"] = "hashtag"
+    await query.edit_message_text(
+        "#️⃣ *جستجوی هشتگ*\n\n"
+        "هشتگ مورد نظر را بنویسید (بدون #):\n"
+        "مثال: `نقص فنی`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
+        ]),
+    )
+    return OBS_SEARCH
+
+
+@require_registration
+async def obs_search_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """شروع جستجوی تاریخ."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["obs_search_mode"] = "date"
+    await query.edit_message_text(
+        "📅 *جستجوی تاریخ*\n\n"
+        "تاریخ را به فرمت `YYYY/MM/DD` وارد کنید:\n"
+        "مثال: `1402/12/15`\n\n"
+        "*(برای جستجوی یک ماه کامل، فقط سال و ماه بزنید: `1402/12`)*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
+        ]),
+    )
+    return OBS_SEARCH
+
+
+@require_registration
+async def obs_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت عبارت جستجو و نمایش نتایج."""
+    user = update.effective_user
+    if not user:
+        return ConversationHandler.END
+
+    mode = context.user_data.get("obs_search_mode", "keyword")
+    raw = (update.message.text or "").strip()
+    if not raw:
+        await update.message.reply_text("❌ عبارت خالی است. دوباره بنویسید:")
+        return OBS_SEARCH
+
+    results = []
+    if mode == "keyword":
+        results = search_observations(user.id, keyword=raw)
+    elif mode == "hashtag":
+        clean = raw.replace("#", "").strip()
+        results = search_observations(user.id, hashtag=clean)
+    elif mode == "date":
+        # تاریخ جلالی → میلادی
+        try:
+            greg_date = jalali_to_gregorian(raw)
+        except Exception:
+            await update.message.reply_text(
+                "❌ فرمت تاریخ نامعتبر. از `YYYY/MM/DD` استفاده کنید (مثال: `1402/12/15`).",
+                parse_mode="Markdown",
+            )
+            return OBS_SEARCH
+        results = search_observations(user.id, obs_date=greg_date)
+        # اگر جستجوی ماه بود (YYYY-MM)
+        if not results and len(raw) == 7:
+            # فقط YYYY/MM وارد شده
+            pass
+        if not results and len(raw) > 7:
+            pass
+
+    if not results:
+        await update.message.reply_text(
+            "🔍 هیچ مشاهده‌ای با این معیار یافت نشد.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 جستجوی دیگر", callback_data="obs:search")],
+                [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
+            ]),
+        )
+        return ConversationHandler.END
+
+    lines = [f"🔍 *نتایج جستجو* ({len(results)} مورد):\n"]
+    for obs in results[:10]:
+        title = obs.get("title") or (obs.get("content") or "")[:40]
+        snippet = (obs.get("content") or "")[:50].replace("\n", " ")
+        date_str = ""
+        if obs.get("obs_date"):
+            try:
+                date_str = f" | {gregorian_to_jalali_display(obs['obs_date'])}"
+            except Exception:
+                pass
+        lines.append(f"• #{obs['id']} — *{title[:35]}*{date_str}")
+
+    lines.append("\nروی گزینهٔ زیر کلیک کنید:")
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=_obs_list_keyboard(results[:10]),
+    )
+    return ConversationHandler.END
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ارتقا به دانش / بایگانی
 # ══════════════════════════════════════════════════════════════════════════════
 
 @require_registration
 async def obs_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """ارتقای مشاهده به دانش — وصل به فلوی ثبت دانش."""
     query = update.callback_query
     await query.answer()
     obs_id = int((query.data or "").split(":")[2])
@@ -585,7 +905,6 @@ async def obs_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 @require_registration
 async def obs_archive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """بایگانی مشاهده."""
     query = update.callback_query
     await query.answer()
     obs_id = int((query.data or "").split(":")[2])
@@ -604,7 +923,7 @@ async def obs_archive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# فیلتر صوتی (مشترک با knowledge.py)
+# فیلترها
 # ══════════════════════════════════════════════════════════════════════════════
 
 class _AudioMessageFilter(filters.MessageFilter):
@@ -622,7 +941,6 @@ AUDIO_MESSAGE_FILTER = _AudioMessageFilter()
 
 
 class _PhotoDocFilter(filters.MessageFilter):
-    """عکس یا فایل (document)."""
     def filter(self, message):
         if not message:
             return False
@@ -649,6 +967,10 @@ def get_observations_conversation_handler() -> ConversationHandler:
             CallbackQueryHandler(obs_extend_start, pattern=r"^obs:extend:\d+$"),
             CallbackQueryHandler(obs_promote, pattern=r"^obs:promote:\d+$"),
             CallbackQueryHandler(obs_archive, pattern=r"^obs:archive:\d+$"),
+            CallbackQueryHandler(obs_search_start, pattern=r"^obs:search$"),
+            CallbackQueryHandler(obs_search_keyword, pattern=r"^obs:search_keyword$"),
+            CallbackQueryHandler(obs_search_hashtag, pattern=r"^obs:search_hashtag$"),
+            CallbackQueryHandler(obs_search_date, pattern=r"^obs:search_date$"),
         ],
         states={
             OBS_CONTENT: [
@@ -674,6 +996,20 @@ def get_observations_conversation_handler() -> ConversationHandler:
             OBS_EXTEND: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, obs_extend_received),
                 MessageHandler(AUDIO_MESSAGE_FILTER, obs_voice_received),
+            ],
+            OBS_TITLE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, obs_title_received),
+            ],
+            OBS_TAGS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, obs_tags_received),
+                CallbackQueryHandler(obs_tags_skip, pattern=r"^obs:skip$"),
+            ],
+            OBS_DATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, obs_date_received),
+                CallbackQueryHandler(obs_date_skip, pattern=r"^obs:skip$"),
+            ],
+            OBS_SEARCH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, obs_search_query),
             ],
         },
         fallbacks=[

@@ -18,6 +18,7 @@ def main_menu_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📓 ثبت مشاهده", callback_data="obs:new")],
         [InlineKeyboardButton("📝 ثبت دانش/تجربه سازمانی", callback_data="kn:new")],
         [InlineKeyboardButton("🗂️ مشاهده‌های من", callback_data="obs:list")],
+        [InlineKeyboardButton("🔍 جستجو در مشاهدات", callback_data="obs:search")],
         [InlineKeyboardButton("👤 پروفایل من", callback_data="profile:view")],
     ]
     return InlineKeyboardMarkup(buttons)

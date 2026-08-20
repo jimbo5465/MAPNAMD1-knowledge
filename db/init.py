@@ -105,12 +105,14 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS observations (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id     INTEGER NOT NULL,
+                title           TEXT,
                 content         TEXT NOT NULL,
                 status          TEXT NOT NULL DEFAULT 'raw'
                                 CHECK (status IN ('raw', 'maturing', 'promoted', 'archived')),
                 promoted_to_kn_id INTEGER REFERENCES knowledge_entries(id),
                 project_name    TEXT,
                 tags            TEXT,
+                obs_date        TEXT,
                 created_at      TEXT NOT NULL,
                 updated_at      TEXT NOT NULL
             )
@@ -118,6 +120,16 @@ def init_db() -> None:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_observations_telegram ON observations(telegram_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_observations_status ON observations(status)")
+
+        # ── migration برای دیتابیس‌های قدیمی (قبل از افزودن title/obs_date) ──
+        # باید قبل از CREATE INDEX روی obs_date باشد
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(observations)").fetchall()]
+        if cols and "title" not in cols:
+            cur.execute("ALTER TABLE observations ADD COLUMN title TEXT")
+        if cols and "obs_date" not in cols:
+            cur.execute("ALTER TABLE observations ADD COLUMN obs_date TEXT")
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_observations_obs_date ON observations(obs_date)")
 
         # ── پیوست‌های مشاهدات (عکس/PDF/فایل) ─────────────────────────────
         cur.execute(

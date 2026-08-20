@@ -366,16 +366,18 @@ def add_observation(
     content: str,
     project_name: str | None = None,
     tags: list[str] | None = None,
+    title: str | None = None,
+    obs_date: str | None = None,
 ) -> int:
     """یک مشاهدهٔ جدید ثبت می‌کند (وضعیت: raw)."""
     now = _now_str()
     with get_connection() as conn:
         cur = conn.execute(
-            """INSERT INTO observations (telegram_id, content, status,
-               project_name, tags, created_at, updated_at)
-               VALUES (?, ?, 'raw', ?, ?, ?, ?)""",
-            (telegram_id, content, project_name,
-             json.dumps(tags or [], ensure_ascii=False), now, now),
+            """INSERT INTO observations (telegram_id, title, content, status,
+               project_name, tags, obs_date, created_at, updated_at)
+               VALUES (?, ?, ?, 'raw', ?, ?, ?, ?, ?)""",
+            (telegram_id, title, content, project_name,
+             json.dumps(tags or [], ensure_ascii=False), obs_date, now, now),
         )
         conn.commit()
         return cur.lastrowid
@@ -408,11 +410,13 @@ def get_observation_by_id(obs_id: int) -> dict | None:
 
 
 def update_observation(obs_id: int, content: str | None = None,
-                       tags: list[str] | None = None) -> None:
+                       tags: list[str] | None = None,
+                       title: str | None = None,
+                       obs_date: str | None = None) -> None:
     """به‌روزرسانی محتوای مشاهده."""
     now = _now_str()
     with get_connection() as conn:
-        if content:
+        if content is not None:
             conn.execute(
                 "UPDATE observations SET content = ?, updated_at = ? WHERE id = ?",
                 (content, now, obs_id),
@@ -421,6 +425,16 @@ def update_observation(obs_id: int, content: str | None = None,
             conn.execute(
                 "UPDATE observations SET tags = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(tags, ensure_ascii=False), now, obs_id),
+            )
+        if title is not None:
+            conn.execute(
+                "UPDATE observations SET title = ?, updated_at = ? WHERE id = ?",
+                (title, now, obs_id),
+            )
+        if obs_date is not None:
+            conn.execute(
+                "UPDATE observations SET obs_date = ?, updated_at = ? WHERE id = ?",
+                (obs_date, now, obs_id),
             )
         conn.commit()
 
@@ -445,6 +459,44 @@ def archive_observation(obs_id: int) -> None:
             (now, obs_id),
         )
         conn.commit()
+
+
+def search_observations(
+    telegram_id: int,
+    keyword: str | None = None,
+    hashtag: str | None = None,
+    obs_date: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """
+    جستجو در مشاهدات کاربر.
+    - keyword: جستجو در title و content
+    - hashtag: جستجوی هشتگ (بدون #)
+    - obs_date: تاریخ میلادی 'YYYY-MM-DD' یا 'YYYY-MM' (جستجوی ماه)
+    """
+    with get_connection() as conn:
+        sql = "SELECT * FROM observations WHERE telegram_id = ?"
+        params: list = [telegram_id]
+
+        if keyword:
+            sql += " AND (title LIKE ? OR content LIKE ?)"
+            like = f"%{keyword}%"
+            params += [like, like]
+        if hashtag:
+            sql += " AND tags LIKE ?"
+            params.append(f"%{hashtag}%")
+        if obs_date:
+            if len(obs_date) == 7:  # YYYY-MM → جستجوی ماه
+                sql += " AND obs_date LIKE ?"
+                params.append(f"{obs_date}%")
+            else:
+                sql += " AND obs_date = ?"
+                params.append(obs_date)
+
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+        return _rows_to_dicts(rows)
 
 
 # ── پیوست‌های مشاهده (عکس/PDF/فایل) ──────────────────────────────────────────
