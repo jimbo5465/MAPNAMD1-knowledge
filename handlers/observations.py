@@ -104,7 +104,11 @@ async def obs_content_received(update: Update, context: ContextTypes.DEFAULT_TYP
     if not text:
         await update.message.reply_text("❌ متن خالی است. دوباره بنویسید یا ویس بفرستید:")
         return OBS_CONTENT
+    return await _save_observation_text(update, context, text)
 
+
+async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
+    """ذخیره مشاهده در DB و نمایش پیام تأیید."""
     user = update.effective_user
     if not user:
         return ConversationHandler.END
@@ -142,13 +146,8 @@ async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = await _transcribe_voice(update, context)
     if text is None:
         return OBS_CONTENT
-    # شبیه‌سازی پیام متنی
-    original = update.message.text
-    update.message.text = text
-    try:
-        return await obs_content_received(update, context)
-    finally:
-        update.message.text = original
+    # مستقیم متن ترنسکرایب‌شده را ذخیره می‌کنیم (بدون دستکاری message)
+    return await _save_observation_text(update, context, text)
 
 
 @require_registration

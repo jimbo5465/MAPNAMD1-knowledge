@@ -108,6 +108,17 @@ def _clean_text(value: str | None, max_len: int) -> str | None:
     return t
 
 
+def _input_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """
+    متن ورودی کاربر را برمی‌گرداند.
+    اگر پیام ویس بوده، متن ترنسکرایب‌شده در kn_pending_text ذخیره شده است.
+    """
+    pending = context.user_data.pop("kn_pending_text", None)
+    if pending:
+        return pending
+    return (update.message.text or "") if update.message else ""
+
+
 # ── تبدیل گفتار به متن (STT) — Groq Whisper ──────────────────────────────────
 
 _STT_TMP_DIR = "/tmp/welderbot_stt"
@@ -188,45 +199,33 @@ async def _transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def kn_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """هندلر سراسری ویس/فایل صوتی در مکالمهٔ ثبت دانش.
 
-    بسته به state فعلی (که از context.user_data قابل تشخیص است) متن تبدیل‌شده
-    را به همان handler متنی می‌دهد.
+    متن ترنسکرایب‌شده را در kn_pending_text می‌گذارد و handler متنی مناسب را صدا می‌زند.
     """
     text = await _transcribe_voice(update, context)
     if text is None:
         return ConversationHandler.END
 
+    context.user_data["kn_pending_text"] = text
+
     # حالت فعلی از context.user_data
     mode = context.user_data.get("kn_mode")
     current_field = context.user_data.get("kn_current_field")
 
-    # شبیه‌سازی پیام متنی برای handler های موجود
-    original_text = update.message.text
-    update.message.text = text
-
-    try:
-        if current_field:
-            # در حال پاسخ به فیلد ناقص
-            result = await kn_field_answer(update, context)
-            return result
-        if mode == "interview":
-            # در حال مصاحبه با AI
-            result = await kn_interview_loop_text(update, context)
-            return result
-        # حالت‌های دستی: نام/سمت/شرح
-        if not context.user_data.get("kn_reporter_name"):
-            result = await kn_reporter_name(update, context)
-            return result
-        if not context.user_data.get("kn_reporter_title"):
-            result = await kn_reporter_title(update, context)
-            return result
-        if not context.user_data.get("kn_description"):
-            result = await kn_description(update, context)
-            return result
-        # پیش‌فرض: مصاحبه
-        result = await kn_interview_loop_text(update, context)
-        return result
-    finally:
-        update.message.text = original_text
+    if current_field:
+        # در حال پاسخ به فیلد ناقص
+        return await kn_field_answer(update, context)
+    if mode == "interview":
+        # در حال مصاحبه با AI
+        return await kn_interview_loop_text(update, context)
+    # حالت‌های دستی: نام/سمت/شرح
+    if not context.user_data.get("kn_reporter_name"):
+        return await kn_reporter_name(update, context)
+    if not context.user_data.get("kn_reporter_title"):
+        return await kn_reporter_title(update, context)
+    if not context.user_data.get("kn_description"):
+        return await kn_description(update, context)
+    # پیش‌فرض: مصاحبه
+    return await kn_interview_loop_text(update, context)
 
 
 def _voice_handler_for(target_handler):
@@ -235,11 +234,8 @@ def _voice_handler_for(target_handler):
         text = await _transcribe_voice(update, context)
         if text is None:
             return ConversationHandler.END
-        update.message.text = text
-        try:
-            return await target_handler(update, context)
-        finally:
-            pass
+        context.user_data["kn_pending_text"] = text
+        return await target_handler(update, context)
     return wrapper
 
 
@@ -769,7 +765,7 @@ async def kn_promote_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def kn_reporter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        name = _clean_text(update.message.text, _MAX_NAME)
+        name = _clean_text(_input_text(update, context), _MAX_NAME)
         if name is None:
             await update.message.reply_text("❌ نام نامعتبر است. دوباره وارد کنید:")
             return KN_REPORTER_NAME
@@ -786,7 +782,7 @@ async def kn_reporter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def kn_reporter_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    value = _clean_text(update.message.text, _MAX_NAME)
+    value = _clean_text(_input_text(update, context), _MAX_NAME)
     if value is None:
         await update.message.reply_text("❌ سمت نامعتبر است. دوباره وارد کنید:")
         return KN_REPORTER_TITLE
@@ -854,7 +850,7 @@ async def kn_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def kn_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """شرح آزاد ← استخراج با AI ← [تأیید طبقه‌بندی] ← پرسش فیلدهای ناقص."""
-    desc = _clean_text(update.message.text, _MAX_DESC)
+    desc = _clean_text(_input_text(update, context), _MAX_DESC)
     if desc is None:
         await update.message.reply_text(
             f"❌ شرح نامعتبر است (حداکثر {_MAX_DESC} کاراکتر). دوباره بنویسید:"
@@ -1023,7 +1019,7 @@ async def _ask_next_field(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def kn_field_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """پاسخ به فیلد ناقص جاری (متن)."""
     try:
-        value = _clean_text(update.message.text, _MAX_FIELD)
+        value = _clean_text(_input_text(update, context), _MAX_FIELD)
         if value is None:
             await update.message.reply_text(
                 f"❌ پاسخ نامعتبر است (حداکثر {_MAX_FIELD} کاراکتر). دوباره بنویسید:"
@@ -1401,7 +1397,7 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
     from engine.knowledge_interview import interview_next_turn
 
     try:
-        user_text = (update.message.text or "").strip()
+        user_text = _input_text(update, context).strip()
         if not user_text:
             await update.message.reply_text("❌ متن خالی است. پاسخ خود را بنویسید:")
             return KN_INTERVIEW_LOOP

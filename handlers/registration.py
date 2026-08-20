@@ -13,7 +13,14 @@ from __future__ import annotations
 
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     CommandHandler,
     ContextTypes,
@@ -88,9 +95,11 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "۲️⃣ *شماره تماس:* (مثال: ۰۹۱۲۱۲۳۴۵۶۷)\n"
         "می‌توانید از دکمهٔ زیر استفاده کنید یا دستی تایپ کنید.",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 ارسال شماره تماس", request_contact=True)],
-        ]),
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("📱 ارسال شماره تماس", request_contact=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
     )
     return PHONE
 
@@ -109,7 +118,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "✅ ثبت شد.\n\n"
         "۳️⃣ *کد پرسنلی:*",
         parse_mode="Markdown",
-        reply_markup=None,
+        reply_markup=ReplyKeyboardRemove(),
     )
     return PERSONNEL_CODE
 
