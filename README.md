@@ -1,181 +1,163 @@
-# WelderBot
+# ربات دانش سازمانی MAPNAMD1-knowledge
 
-WelderBot is a Telegram bot for managing **Welder Qualification Tests (WQT)**
-based on **ASME Section IX**.
+ربات تلگرام برای **ثبت، مدیریت و جستجوی دانش سازمانی و مشاهدات میدانی** — ویژه‌ی واحد MAPNAMD1.
 
-The project is designed with a modular architecture so that each feature can
-be developed, tested, and maintained independently.
-
----
-
-## Main Features
-
-- Welder Management
-- WQT Registration (ASME Section IX)
-- Excel Certificate Export (official WPQ form)
-- Hierarchical Access Control (3 levels)
-- Project Management
-- Contractor Management (project ⇆ contractor relationship lifecycle)
-- Qualification History
-- Authentication & Authorization
-- SQLite Database
+این ربات به کاربران اجازه می‌دهد:
+- **مشاهده** ثبت کنند (متن، ویس، عکس، فایل) با عنوان، هشتگ و تاریخ
+- **دانش/تجربه سازمانی** را ثبت و ساختارمند کنند (دستی یا مصاحبه با هوش مصنوعی)
+- در مشاهدات **جستجو** کنند (بر اساس متن، هشتگ، تاریخ)
 
 ---
 
-## Access Control
+## امکانات اصلی
 
-Three access levels, each scoped to a defined boundary. Higher levels
-inherit the permissions of lower levels; the global admin
-(`config.ADMIN_IDS`) always has level 1 globally.
+| بخش | توضیح |
+|---|---|
+| 📓 ثبت مشاهده | ثبت سریع مشاهده‌ی میدانی با متن/ویس + عنوان + هشتگ + تاریخ + پیوست (عکس/PDF) |
+| 🔍 جستجو در مشاهدات | جستجو بر اساس متن، هشتگ یا تاریخ (جلالی) |
+| 📝 ثبت دانش | ثبت دانش/تجربه‌ی سازمانی — دستی یا مصاحبه‌ی هوشمند با AI |
+| 🗂️ مشاهده‌های من | مرور، افزودن مطلب، ارتقا به دانش، بایگانی |
+| 👤 پروفایل من | مشاهده و ویرایش اطلاعات ثبت‌نام |
 
-| Level | Role | Scope |
+---
+
+## ثبت مشاهده (فلوی کامل)
+
+```
+متن / ویس / عکس
+    ↓
+✅ ذخیره متن
+    ↓
+📝 عنوان (اجباری)
+    ↓
+#️⃣ هشتگ‌ها (اختیاری — دکمه «رد کردن»)
+    ↓
+📅 تاریخ (اختیاری — پیش‌فرض امروز، فرمت 1402/12/15)
+    ↓
+✅ خلاصه‌ی کامل مشاهده
+    ↓
+🖼️📎 پیوست (عکس/PDF/فایل — اختیاری)
+```
+
+### ویس
+- صدای فارسی کاربر به متن تبدیل می‌شود (Groq whisper-large-v3-turbo)
+- متن تشخیص‌داده‌شده نمایش داده می‌شود
+- کاربر می‌تواند **اصلاح کند** (جایگزین یا افزودن به متن قبلی) یا **تأیید کند**
+
+### ذخیره‌سازی عکس
+- سایز **متوسط** تلگرام (~۸۰۰px) به‌جای بزرگ‌ترین سایز — برای صرفه‌جویی در فضای دیسک
+- فایل‌ها در `media/obs_attachments/<obs_id>/` ذخیره می‌شوند
+
+---
+
+## جستجو در مشاهدات
+
+| روش | ورودی کاربر | مثال |
 |---|---|---|
-| 1 | Global project manager | Global — create/edit/delete any project |
-| 2 | Contractor manager | Scoped to one project — add/edit/delete contractors within it |
-| 3 | Operator | Scoped to one contractor — register tests only |
-
-Access is granted from the main menu → "👥 مدیریت کاربران". A user must
-have sent `/start` at least once to appear in the selection list (table
-`pending_users`).
-
-Project–contractor relationship is many-to-many (a project can have
-multiple contractors), tracked in `project_contractors`.
-
-Project termination is soft and reversible: welder and qualification
-records stay intact, only new activity registration is blocked.
-
-Contractor management supports add / re-link / label / terminate per
-project. Termination requested by level 2 requires level-1 approval
-(via immediate Telegram notification) before taking effect.
-
-Access-level enforcement applies throughout the WQT registration flow:
-level 2 sees only their own projects, level 3 sees only their assigned
-contractor and skips the corresponding selection steps automatically.
+| 🔍 عنوان/متن | کلمه‌ی کلیدی | `شیر اطمینان` |
+| #️⃣ هشتگ | نام هشتگ (بدون #) | `نقص فنی` |
+| 📅 تاریخ | تاریخ جلالی روز یا ماه | `1402/12/15` یا `1402/12` |
 
 ---
 
-## Project Structure
-welderbot/
+## ثبت دانش سازمانی
+
+دو روش:
+
+1. **✍️ ثبت دستی** — کاربر متن شرح را می‌فرستد، AI فیلدهای ساختارمند را استخراج می‌کند (عنوان، درس‌آموخته، راه‌حل و...) و کاربر تأیید/اصلاح می‌کند.
+2. **🎙️ مصاحبه با AI** — ربات سؤال‌های متنی بر اساس نوع دانش می‌پرسد تا اطلاعات کامل شود.
+
+پس از تکمیل، پیش‌نویس **DANA** (سند دانش سازمانی) ساخته می‌شود و خروجی PDF/Word قابل دریافت است.
+
+### قفل «در حال پردازش»
+هنگامی که AI مشغول است (استخراج فیلد، مصاحبه، ساخت فرم)، هر پیام/دکمه‌ی اضافی کاربر با پیام
+«⏳ هوش مصنوعی در حال بررسی است...» پاسخ داده می‌شود — نه خطا.
+
+---
+
+## ساختار پروژه
+
+```
+MAPNAMD1-knowledge/
+├── main.py                    # نقطه‌ی ورود — ثبت handler ها و اجرا
+├── config.py                  # تنظیمات و متغیرهای محیطی
+├── requirements.txt           # وابستگی‌ها
 ├── db/
+│   ├── init.py                # ساخت جداول و migration
+│   └── models.py              # مدل‌ها و CRUD (کاربر، دانش، مشاهده، پیوست)
 ├── engine/
-├── forms/
+│   ├── knowledge_ai.py        # استخراج فیلدها با AI
+│   ├── knowledge_interview.py # مصاحبه‌ی هوشمند + ساخت فرم نهایی
+│   ├── knowledge_draft.py     # ساخت گزارش DANA
+│   ├── knowledge_render.py    # خروجی PDF/Word
+│   ├── knowledge_tree.py      # درخت دانش سازمانی
+│   └── knowledge_numbering.py # شماره‌گذاری دانش
 ├── handlers/
+│   ├── registration.py        # ثبت‌نام و پروفایل
+│   ├── observations.py        # مشاهدات میدانی + جستجو
+│   ├── knowledge.py           # ثبت دانش
+│   ├── keyboards.py           # کیبوردها
+│   └── auth.py                # احراز هویت
 ├── utils/
-├── media/
-├── logs/
-├── config.py
-├── main.py
-├── requirements.txt
-└── welderbot.service
+│   ├── busy_lock.py           # قفل «در حال پردازش» AI
+│   ├── dates.py               # تبدیل تاریخ جلالی/میلادی
+│   └── validators.py          # اعتبارسنجی
+├── data/                      # [runtime] دیتابیس SQLite
+├── media/                     # [runtime] عکس‌ها و فایل‌ها
+└── logs/                      # [runtime] لاگ‌ها
+```
 
 ---
 
-## Technology Stack
+## تکنولوژی
 
-- Python 3
-- python-telegram-bot
-- SQLite
-- OpenPyXL
-- Pillow
-- jdatetime
+- **Python 3.11**
+- **python-telegram-bot 20.7**
+- **SQLite** (فایل `data/knowledge.db`)
+- **Groq API** — تبدیل صوت به متن (whisper-large-v3-turbo)
+- **OpenCode Go / deepseek-v4-flash** — هوش مصنوعی استخراج فیلد و مصاحبه
+- **jdatetime** — تاریخ جلالی
+- **reportlab / python-docx** — خروجی PDF/Word
 
 ---
 
-## Installation
-
-Create a virtual environment:
+## نصب و اجرا
 
 ```bash
+# ۱. کلون
+git clone https://github.com/jimbo5465/MAPNAMD1-knowledge.git
+cd MAPNAMD1-knowledge
+
+# ۲. محیط مجازی
 python -m venv .venv
-```
-
-Activate it:
-
-Linux
-```bash
 source .venv/bin/activate
-```
-
-Windows
-```bash
-.venv\Scripts\activate
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
-```
 
----
+# ۳. متغیرهای محیطی
+export BOT_TOKEN="توکن ربات از BotFather"
+export KNOWLEDGE_AI_API_KEY="کلید OpenCode Go"
+export KNOWLEDGE_AI_MODEL="deepseek-v4-flash"
+export GROQ_API_KEY="کلید Groq"
 
-## Environment Variables
-
-The project reads all sensitive values from environment variables.
-
-Required:
-```text
-BOT_TOKEN
-ADMIN_IDS
-```
-
-Optional:
-```text
-WELDERBOT_DEBUG
-```
-
----
-
-## Run
-
-```bash
+# ۴. اجرا
 python main.py
 ```
 
 ---
 
-## Dependencies
+## استقرار با systemd (VPS)
 
-- python-telegram-bot
-- openpyxl
-- Pillow
-- jdatetime
-
-See `requirements.txt` for exact versions.
-
----
-
-## Architecture
-
-Documented in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
-
-## Internal API
-
-Stable internal APIs are documented in [`CONTRACTS.md`](./CONTRACTS.md).
+```bash
+sudo cp MAPNAMD1-knowledge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable knowledgebot
+sudo systemctl start knowledgebot
+sudo systemctl status knowledgebot        # بررسی وضعیت
+sudo journalctl -u knowledgebot -f        # لاگ زنده
+```
 
 ---
 
-## Deployment
+## مجوز
 
-The project includes a ready-to-use systemd service: `welderbot.service`.
-See `RUN.md` for deployment instructions.
-
----
-
-## Known Open Item
-
-Excel WPQ export: core logic and bot wiring are complete and tested.
-Two items remain — see `ARCHITECTURE.md` and `CONTRACTS.md` for details:
-- A few secondary fields (progression, shielding gas, filler spec, etc.)
-  are not yet written to `extra_data` when a qualification is saved.
-- Plate sample thickness is not yet stored in the database.
-
----
-
-## License
-
-Private Project
-
-Copyright © [mohsen]
-
-All Rights Reserved.
+پروژه‌ی داخلی MAPNAMD1 — استفاده برای واحد دانش سازمانی.
