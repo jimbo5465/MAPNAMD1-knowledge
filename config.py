@@ -27,6 +27,9 @@ DB_PATH: str = os.path.join(_PROJECT_ROOT, "data", "knowledge.db")
 # مسیر ذخیره عکس‌های ثبت دانش (هر رکورد یک زیرپوشه به نام knowledge id دارد)
 KN_PHOTO_PATH: str = os.path.join(_PROJECT_ROOT, "media", "kn_photos")
 
+# مسیر ذخیره پیوست‌های مشاهدات (هر مشاهده یک زیرپوشه به نام obs id دارد)
+OBS_ATTACH_PATH: str = os.path.join(_PROJECT_ROOT, "media", "obs_attachments")
+
 # مسیر خروجی فایل‌های PDF/Word پیش‌نویس DANA ثبت دانش
 KN_OUTPUT_PATH: str = os.path.join(_PROJECT_ROOT, "media", "exports", "kn")
 
@@ -68,6 +71,7 @@ def _ensure_dirs() -> None:
     for _dir in (
         os.path.dirname(DB_PATH),   # data/
         KN_PHOTO_PATH,              # media/kn_photos/
+        OBS_ATTACH_PATH,            # media/obs_attachments/
         KN_OUTPUT_PATH,             # media/exports/kn/
     ):
         os.makedirs(_dir, exist_ok=True)

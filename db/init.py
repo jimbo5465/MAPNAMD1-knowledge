@@ -119,4 +119,22 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_observations_telegram ON observations(telegram_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_observations_status ON observations(status)")
 
+        # ── پیوست‌های مشاهدات (عکس/PDF/فایل) ─────────────────────────────
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS observation_attachments (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                observation_id  INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+                file_path       TEXT NOT NULL,
+                file_name       TEXT,
+                mime_type       TEXT,
+                file_size       INTEGER,
+                uploaded_at     TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_obs_attachments_obs ON observation_attachments(observation_id)"
+        )
+
         conn.commit()

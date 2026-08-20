@@ -1,11 +1,13 @@
 """
 هندلر مشاهدات صحرایی (observations).
 ثبت سریع یک مشاهده بدون قالب، مرور، افزودن، ارتقا به دانش.
+پشتیبانی از: متن، ویس (با تأیید/اصلاح)، پیوست (عکس/PDF/فایل).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -19,10 +21,11 @@ from telegram.ext import (
 import config
 from db.models import (
     add_observation,
+    add_observation_attachment,
     archive_observation,
     get_observation_by_id,
+    list_observation_attachments,
     list_observations_by_user,
-    promote_observation,
     update_observation,
 )
 from handlers.auth import require_registration
@@ -32,7 +35,15 @@ from handlers.knowledge import _transcribe_voice
 logger = logging.getLogger(__name__)
 
 # States
-OBS_CONTENT, OBS_EXTEND = range(2)
+(
+    OBS_CONTENT,       # 0 — دریافت متن/ویس/عکس اولیه
+    OBS_CONFIRM_VOICE, # 1 — تأیید/اصلاح متن ترنسکرایب‌شده
+    OBS_EDIT_CHOICE,   # 2 — انتخاب جایگزین/افزودن برای اصلاح
+    OBS_ATTACHMENTS,   # 3 — دریافت پیوست‌ها
+    OBS_EXTEND,        # 4 — افزودن مطلب به مشاهده موجود
+) = range(5)
+
+_OBS_TMP_DIR = "/tmp/welderbot_obs_attachments"
 
 
 def _status_label(status: str) -> str:
@@ -64,11 +75,7 @@ def _obs_list_keyboard(obs_list: list[dict]) -> InlineKeyboardMarkup:
 def _obs_view_keyboard(obs: dict) -> InlineKeyboardMarkup:
     """دکمه‌های عملیات روی یک مشاهده."""
     rows = []
-    if obs.get("status") == "raw":
-        rows.append([InlineKeyboardButton("✏️ افزودن مطلب", callback_data=f"obs:extend:{obs['id']}")])
-        rows.append([InlineKeyboardButton("📝 ارتقا به دانش", callback_data=f"obs:promote:{obs['id']}")])
-        rows.append([InlineKeyboardButton("🗑 بایگانی", callback_data=f"obs:archive:{obs['id']}")])
-    elif obs.get("status") == "maturing":
+    if obs.get("status") in ("raw", "maturing"):
         rows.append([InlineKeyboardButton("✏️ افزودن مطلب", callback_data=f"obs:extend:{obs['id']}")])
         rows.append([InlineKeyboardButton("📝 ارتقا به دانش", callback_data=f"obs:promote:{obs['id']}")])
         rows.append([InlineKeyboardButton("🗑 بایگانی", callback_data=f"obs:archive:{obs['id']}")])
@@ -78,17 +85,49 @@ def _obs_view_keyboard(obs: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _attachments_confirm_keyboard(obs_id: int) -> InlineKeyboardMarkup:
+    """دکمه‌های بعد از ذخیره متن: پیوست یا تمام."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖼️ افزودن عکس", callback_data=f"obs:add_photo:{obs_id}")],
+        [InlineKeyboardButton("📎 افزودن فایل (PDF/...)", callback_data=f"obs:add_file:{obs_id}")],
+        [InlineKeyboardButton("✅ تمام شد", callback_data="menu:main")],
+    ])
+
+
+def _voice_confirm_keyboard(obs_id: int | None) -> InlineKeyboardMarkup:
+    """دکمه‌های تأیید/اصلاح متن ترنسکرایب‌شده."""
+    buttons = [
+        [InlineKeyboardButton("✏️ اصلاح متن", callback_data="obs:edit_voice")],
+        [InlineKeyboardButton("✅ تأیید و ذخیره", callback_data="obs:confirm_voice")],
+    ]
+    if obs_id:
+        buttons.append([InlineKeyboardButton("🏠 انصراف", callback_data="menu:main")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def _edit_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔁 جایگزین متن قبلی شود", callback_data="obs:edit_replace")],
+        [InlineKeyboardButton("➕ به متن قبلی اضافه شود", callback_data="obs:edit_append")],
+    ])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# شروع ثبت مشاهده
+# ══════════════════════════════════════════════════════════════════════════════
+
 @require_registration
 async def obs_new_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """شروع ثبت مشاهده جدید."""
     query = update.callback_query
     await query.answer()
+    context.user_data["obs_new_photos"] = []
+    context.user_data["obs_new_files"] = []
     await query.edit_message_text(
         "📓 *ثبت مشاهده جدید*\n\n"
-        "مشاهده‌ی خود را بنویسید یا ویس بفرستید.\n"
+        "مشاهده‌ی خود را بنویسید، ویس بفرستید، یا عکس/فایل ضمیمه کنید.\n"
         "🎙️ *راهنما:* فارسی صحبت کنید — صدای شما توسط هوش مصنوعی به متن تبدیل می‌شود.\n\n"
-        "این یک یادداشت سریع و بدون قالب است — می‌توانید بعداً به آن مطلب اضافه کنید "
-        "یا به دانش تبدیلش کنید.",
+        "پس از ثبت، می‌توانید پیوست هم اضافه کنید.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🏠 انصراف", callback_data="menu:main")],
@@ -97,9 +136,13 @@ async def obs_new_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return OBS_CONTENT
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# دریافت متن
+# ══════════════════════════════════════════════════════════════════════════════
+
 @require_registration
 async def obs_content_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """دریافت متن/ویس مشاهده."""
+    """دریافت متن مشاهده."""
     text = (update.message.text or "").strip()
     if not text:
         await update.message.reply_text("❌ متن خالی است. دوباره بنویسید یا ویس بفرستید:")
@@ -108,7 +151,7 @@ async def obs_content_received(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
-    """ذخیره مشاهده در DB و نمایش پیام تأیید."""
+    """ذخیره مشاهده در DB و نمایش پیام تأیید + گزینه پیوست."""
     user = update.effective_user
     if not user:
         return ConversationHandler.END
@@ -126,29 +169,214 @@ async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ خطا در ثبت مشاهده. دوباره تلاش کنید.")
         return OBS_CONTENT
 
+    context.user_data["obs_saved_id"] = obs_id
+
     await update.message.reply_text(
         f"✅ *مشاهده ثبت شد* (#{obs_id})\n\n"
         f"_{text[:200]}_\n\n"
-        "می‌توانید همین حالا مطلب بیشتری اضافه کنید، یا بعداً از «مشاهده‌های من» به آن برگردید.",
+        "آیا می‌خواهید ضمیمه‌ای (عکس، PDF، فایل) اضافه کنید؟",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ افزودن مطلب", callback_data=f"obs:extend:{obs_id}")],
-            [InlineKeyboardButton("📝 ارتقا به دانش", callback_data=f"obs:promote:{obs_id}")],
-            [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
-        ]),
+        reply_markup=_attachments_confirm_keyboard(obs_id),
     )
-    return ConversationHandler.END
+    return OBS_ATTACHMENTS
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# دریافت ویس + تأیید/اصلاح
+# ══════════════════════════════════════════════════════════════════════════════
 
 @require_registration
 async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """دریافت ویس برای مشاهده."""
+    """دریافت ویس برای مشاهده — متن ترنسکرایب‌شده را نشان می‌دهد و تأیید می‌گیرد."""
     text = await _transcribe_voice(update, context)
     if text is None:
         return OBS_CONTENT
-    # مستقیم متن ترنسکرایب‌شده را ذخیره می‌کنیم (بدون دستکاری message)
+
+    context.user_data["obs_voice_text"] = text
+
+    await update.message.reply_text(
+        f"📝 *متن تشخیص‌داده‌شده از ویس شما:*\n\n_{text}_\n\n"
+        "آیا این متن درست است؟ می‌توانید اصلاح کنید.",
+        parse_mode="Markdown",
+        reply_markup=_voice_confirm_keyboard(None),
+    )
+    return OBS_CONFIRM_VOICE
+
+
+@require_registration
+async def obs_confirm_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """تأیید متن ترنسکرایب‌شده ← ذخیره مستقیم."""
+    query = update.callback_query
+    await query.answer()
+    text = context.user_data.get("obs_voice_text", "")
+    if not text:
+        await query.edit_message_text("❌ متنی یافت نشد. دوباره ویس بفرستید.")
+        return OBS_CONTENT
     return await _save_observation_text(update, context, text)
 
+
+@require_registration
+async def obs_edit_voice_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """شروع ویرایش متن ترنسکرایب‌شده."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "✏️ متن اصلاح‌شده را بنویسید:",
+    )
+    return OBS_CONFIRM_VOICE  # next text message will hit obs_edit_voice_text
+
+
+@require_registration
+async def obs_edit_voice_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت متن اصلاح‌شده — سؤال جایگزین یا افزودن."""
+    corrected = (update.message.text or "").strip()
+    if not corrected:
+        await update.message.reply_text("❌ متن خالی است. دوباره بنویسید:")
+        return OBS_CONFIRM_VOICE
+
+    context.user_data["obs_edited_text"] = corrected
+    await update.message.reply_text(
+        "🔄 این متن اصلاح‌شده:\n\n"
+        f"_{corrected[:200]}_\n\n"
+        "آیا می‌خواهید این متن جایگزین متن تشخیص‌داده‌شده شود یا به آن اضافه شود؟",
+        parse_mode="Markdown",
+        reply_markup=_edit_choice_keyboard(),
+    )
+    return OBS_EDIT_CHOICE
+
+
+@require_registration
+async def obs_edit_replace(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """جایگزینی متن تشخیص‌داده‌شده با متن اصلاحی."""
+    query = update.callback_query
+    await query.answer()
+    corrected = context.user_data.get("obs_edited_text", "")
+    if not corrected:
+        await query.edit_message_text("❌ متنی برای ذخیره یافت نشد.")
+        return OBS_CONTENT
+    context.user_data["obs_voice_text"] = corrected
+    return await _save_observation_text(update, context, corrected)
+
+
+@require_registration
+async def obs_edit_append(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """افزودن متن اصلاحی به تشخیص داده‌شده."""
+    query = update.callback_query
+    await query.answer()
+    original = context.user_data.get("obs_voice_text", "")
+    corrected = context.user_data.get("obs_edited_text", "")
+    combined = original + "\n\n(اصلاح: " + corrected + ")"
+    context.user_data["obs_voice_text"] = combined
+    return await _save_observation_text(update, context, combined)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# پیوست‌ها (عکس/PDF/فایل)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@require_registration
+async def obs_add_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """شروع افزودن عکس به مشاهده."""
+    query = update.callback_query
+    await query.answer()
+    obs_id = int((query.data or "").split(":")[2])
+    context.user_data["obs_attach_obs_id"] = obs_id
+    await query.edit_message_text(
+        "🖼️ عکس را ارسال کنید. پس از دریافت، می‌توانید ادامه دهید یا تمام کنید.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ تمام شد", callback_data="menu:main")],
+        ]),
+    )
+    return OBS_ATTACHMENTS
+
+
+@require_registration
+async def obs_add_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """شروع افزودن فایل (PDF/...) به مشاهده."""
+    query = update.callback_query
+    await query.answer()
+    obs_id = int((query.data or "").split(":")[2])
+    context.user_data["obs_attach_obs_id"] = obs_id
+    await query.edit_message_text(
+        "📎 فایل (PDF، سند و...) را ارسال کنید. پس از دریافت، می‌توانید ادامه دهید یا تمام کنید.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ تمام شد", callback_data="menu:main")],
+        ]),
+    )
+    return OBS_ATTACHMENTS
+
+
+@require_registration
+async def obs_attachment_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت عکس/فایل برای پیوست به مشاهده."""
+    obs_id = context.user_data.get("obs_attach_obs_id") or context.user_data.get("obs_saved_id")
+    if not obs_id:
+        await update.message.reply_text("❌ شناسه مشاهده یافت نشد. دوباره /start بزنید.")
+        return OBS_ATTACHMENTS
+
+    # تشخیص نوع فایل
+    msg = update.message
+    file_id = None
+    file_name = None
+    mime_type = None
+
+    if msg.photo:
+        # عکس — آخرین (بزرگترین) سایز
+        file_id = msg.photo[-1].file_id
+        file_name = f"photo_{file_id[:12]}.jpg"
+        mime_type = "image/jpeg"
+    elif msg.document:
+        file_id = msg.document.file_id
+        file_name = msg.document.file_name or f"file_{file_id[:12]}"
+        mime_type = msg.document.mime_type or "application/octet-stream"
+
+    if not file_id:
+        await update.message.reply_text("❌ فقط عکس و فایل پشتیبانی می‌شود. دوباره بفرستید:")
+        return OBS_ATTACHMENTS
+
+    # دانلود فایل
+    try:
+        file = await context.bot.get_file(file_id)
+        os.makedirs(_OBS_TMP_DIR, exist_ok=True)
+        obs_dir = os.path.join(config.OBS_ATTACH_PATH, str(obs_id))
+        os.makedirs(obs_dir, exist_ok=True)
+        # جلوگیری از overwrite
+        base, ext = os.path.splitext(file_name or "file")
+        dest = os.path.join(obs_dir, file_name or f"attachment_{file_id[:12]}")
+        counter = 1
+        while os.path.exists(dest):
+            dest = os.path.join(obs_dir, f"{base}_{counter}{ext}")
+            counter += 1
+
+        await file.download_to_drive(dest)
+        file_size = os.path.getsize(dest)
+
+        # ثبت در DB
+        add_observation_attachment(
+            observation_id=obs_id,
+            file_path=dest,
+            file_name=file_name or os.path.basename(dest),
+            mime_type=mime_type,
+            file_size=file_size,
+        )
+        logger.info("پیوست به مشاهده #%d افزوده شد: %s", obs_id, dest)
+    except Exception:
+        logger.exception("خطا در دانلود پیوست مشاهده")
+        await update.message.reply_text("❌ خطا در دریافت پیوست. دوباره تلاش کنید.")
+        return OBS_ATTACHMENTS
+
+    type_label = "🖼️ عکس" if mime_type and mime_type.startswith("image") else "📎 فایل"
+    await update.message.reply_text(
+        f"✅ {type_label} ذخیره شد.\n\n"
+        "می‌توانید پیوست دیگری اضافه کنید یا تمام کنید.",
+        reply_markup=_attachments_confirm_keyboard(obs_id),
+    )
+    return OBS_ATTACHMENTS
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# لیست مشاهدات
+# ══════════════════════════════════════════════════════════════════════════════
 
 @require_registration
 async def obs_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -175,7 +403,9 @@ async def obs_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     lines = [f"📂 *مشاهدات شما* ({len(obs_list)} مورد):\n"]
     for obs in obs_list[:10]:
         snippet = (obs.get("content") or "")[:60].replace("\n", " ")
-        lines.append(f"• #{obs['id']} — {snippet}...\n   {_status_label(obs['status'])}")
+        att_count = len(list_observation_attachments(obs["id"]))
+        att_label = f" 📎{att_count}" if att_count else ""
+        lines.append(f"• #{obs['id']} — {snippet}...\n   {_status_label(obs['status'])}{att_label}")
 
     await query.edit_message_text(
         "\n".join(lines),
@@ -185,9 +415,13 @@ async def obs_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# مشاهده جزئیات
+# ══════════════════════════════════════════════════════════════════════════════
+
 @require_registration
 async def obs_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """نمایش جزئیات یک مشاهده."""
+    """نمایش جزئیات یک مشاهده با پیوست‌ها."""
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -198,22 +432,41 @@ async def obs_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text("⚠️ مشاهده یافت نشد.", reply_markup=back_to_main_keyboard())
         return ConversationHandler.END
 
-    from datetime import datetime
     created = obs.get("created_at", "")
     try:
         created_fa = created[:16].replace("T", " ")
     except Exception:
         created_fa = created
 
+    # پیوست‌ها
+    attachments = list_observation_attachments(obs_id)
+    att_lines = []
+    if attachments:
+        att_lines.append("\n📎 *پیوست‌ها:*")
+        for a in attachments:
+            name = a.get("file_name") or "فایل"
+            mime = a.get("mime_type") or ""
+            icon = "🖼️" if mime.startswith("image") else "📄"
+            size = a.get("file_size") or 0
+            size_str = f" ({size // 1024}KB)" if size > 0 else ""
+            att_lines.append(f"  {icon} {name}{size_str}")
+    else:
+        att_lines.append("\n_بدون پیوست_")
+
     text = (
         f"📓 *مشاهده #{obs_id}*\n"
         f"وضعیت: {_status_label(obs['status'])}\n"
         f"زمان: {created_fa}\n\n"
         f"{obs.get('content')}"
+        + "\n".join(att_lines)
     )
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=_obs_view_keyboard(obs))
     return ConversationHandler.END
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# افزودن مطلب به مشاهده موجود
+# ══════════════════════════════════════════════════════════════════════════════
 
 @require_registration
 async def obs_extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -227,11 +480,6 @@ async def obs_extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not obs:
         await query.edit_message_text("⚠️ مشاهده یافت نشد.", reply_markup=back_to_main_keyboard())
         return ConversationHandler.END
-
-    # تغییر وضعیت به maturing
-    from db.models import update_observation as _upd
-    if obs["status"] == "raw":
-        _upd(obs_id, content=obs["content"])  # فقط برای touch (updated_at)
 
     await query.edit_message_text(
         f"✏️ *افزودن مطلب به مشاهده #{obs_id}*\n\n"
@@ -281,6 +529,10 @@ async def obs_extend_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     return OBS_EXTEND
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ارتقا به دانش / بایگانی
+# ══════════════════════════════════════════════════════════════════════════════
+
 @require_registration
 async def obs_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """ارتقای مشاهده به دانش — وصل به فلوی ثبت دانش."""
@@ -293,14 +545,11 @@ async def obs_promote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await query.edit_message_text("⚠️ مشاهده یافت نشد.", reply_markup=back_to_main_keyboard())
         return ConversationHandler.END
 
-    # ذخیره در user_data تا handler دانش بتواند از آن استفاده کند
     context.user_data["kn_observation_pending"] = {
         "obs_id": obs_id,
         "content": obs.get("content", ""),
     }
 
-    # هدایت به انتخاب نوع دانش (مثل kn_type ولی با پر کردن description از مشاهده)
-    from handlers.knowledge import kn_mode_entry
     await query.edit_message_text(
         "📝 *ارتقا مشاهده به دانش*\n\n"
         "مشاهدهٔ شما به عنوان «شرح اولیه» در نظر گرفته می‌شود.\n"
@@ -352,6 +601,21 @@ class _AudioMessageFilter(filters.MessageFilter):
 AUDIO_MESSAGE_FILTER = _AudioMessageFilter()
 
 
+class _PhotoDocFilter(filters.MessageFilter):
+    """عکس یا فایل (document)."""
+    def filter(self, message):
+        if not message:
+            return False
+        if message.photo:
+            return True
+        if message.document:
+            return True
+        return False
+
+
+PHOTO_DOC_FILTER = _PhotoDocFilter()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ساخت ConversationHandler
 # ══════════════════════════════════════════════════════════════════════════════
@@ -370,6 +634,22 @@ def get_observations_conversation_handler() -> ConversationHandler:
             OBS_CONTENT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, obs_content_received),
                 MessageHandler(AUDIO_MESSAGE_FILTER, obs_voice_received),
+                MessageHandler(PHOTO_DOC_FILTER, obs_attachment_received),
+            ],
+            OBS_CONFIRM_VOICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, obs_edit_voice_text),
+                CallbackQueryHandler(obs_confirm_voice, pattern=r"^obs:confirm_voice$"),
+                CallbackQueryHandler(obs_edit_voice_start, pattern=r"^obs:edit_voice$"),
+            ],
+            OBS_EDIT_CHOICE: [
+                CallbackQueryHandler(obs_edit_replace, pattern=r"^obs:edit_replace$"),
+                CallbackQueryHandler(obs_edit_append, pattern=r"^obs:edit_append$"),
+            ],
+            OBS_ATTACHMENTS: [
+                MessageHandler(filters.PHOTO, obs_attachment_received),
+                MessageHandler(filters.Document.ALL, obs_attachment_received),
+                CallbackQueryHandler(obs_add_photo_start, pattern=r"^obs:add_photo:\d+$"),
+                CallbackQueryHandler(obs_add_file_start, pattern=r"^obs:add_file:\d+$"),
             ],
             OBS_EXTEND: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, obs_extend_received),

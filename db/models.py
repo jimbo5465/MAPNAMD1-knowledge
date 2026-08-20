@@ -445,3 +445,42 @@ def archive_observation(obs_id: int) -> None:
             (now, obs_id),
         )
         conn.commit()
+
+
+# ── پیوست‌های مشاهده (عکس/PDF/فایل) ──────────────────────────────────────────
+
+def add_observation_attachment(
+    observation_id: int,
+    file_path: str,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+    file_size: int | None = None,
+) -> int:
+    """یک پیوست به مشاهده اضافه می‌کند."""
+    now = _now_str()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO observation_attachments
+               (observation_id, file_path, file_name, mime_type, file_size, uploaded_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (observation_id, file_path, file_name, mime_type, file_size, now),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def list_observation_attachments(observation_id: int) -> list[dict]:
+    """پیوست‌های یک مشاهده."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM observation_attachments WHERE observation_id = ? ORDER BY id",
+            (observation_id,),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+
+def remove_observation_attachment(attachment_id: int) -> None:
+    """یک پیوست را حذف می‌کند."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM observation_attachments WHERE id = ?", (attachment_id,))
+        conn.commit()
