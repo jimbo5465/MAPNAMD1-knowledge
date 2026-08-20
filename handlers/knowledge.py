@@ -1103,8 +1103,13 @@ async def _open_photos(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def kn_photo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """عکس‌ها در پوشهٔ pending نگه داشته و هنگام ثبت نهایی منتقل می‌شوند."""
     try:
-        photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
+        # انتخاب سایز بهینه: سایز متوسط (~800px) به‌جای بزرگترین برای صرفه‌جویی فضا
+        photos = update.message.photo
+        if len(photos) >= 3:
+            chosen = photos[-2]
+        else:
+            chosen = photos[-1]
+        file = await context.bot.get_file(chosen.file_id)
 
         user_dir = os.path.join(config.KN_PHOTO_PATH, "pending", str(update.effective_user.id))
         os.makedirs(user_dir, exist_ok=True)

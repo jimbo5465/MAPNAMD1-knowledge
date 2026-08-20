@@ -504,7 +504,15 @@ async def obs_attachment_received(update: Update, context: ContextTypes.DEFAULT_
     mime_type = None
 
     if msg.photo:
-        file_id = msg.photo[-1].file_id
+        # انتخاب سایز بهینه: بزرگترین نیست، بلکه سایز متوسط (~800px) برای صرفه‌جویی فضا.
+        # تلگرام چند سایز می‌فرستد؛ آخرین = بزرگترین. سایز ماقبل آخر معمولاً ~800px است.
+        photos = msg.photo
+        if len(photos) >= 3:
+            # سایز دوم از آخر (~800px) — تعادل کیفیت/حجم
+            chosen = photos[-2]
+        else:
+            chosen = photos[-1]  # فقط یک یا دو سایز — بزرگترین موجود
+        file_id = chosen.file_id
         file_name = f"photo_{file_id[:12]}.jpg"
         mime_type = "image/jpeg"
     elif msg.document:
