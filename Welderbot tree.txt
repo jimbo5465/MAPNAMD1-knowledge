@@ -1,0 +1,48 @@
+welderbot/
+├── main.py                          # نقطه ورود بات
+├── config.py                        # تنظیمات و متغیرهای محیطی
+├── requirements.txt
+├── RUN.md
+├── welderbot.service                # systemd unit برای اجرا روی VPS
+├── welderbot.db                     # دیتابیس اصلی (source of truth)
+│
+├── db/                               # لایه دیتابیس
+│   ├── __init__.py
+│   ├── init.py                      # ساخت جداول / migrations
+│   └── models.py                    # مدل‌ها و توابع CRUD (پروژه، پیمانکار، جوشکار، کاربر و ...)
+│
+├── engine/                           # لایه منطق کسب‌وکار
+│   ├── __init__.py
+│   ├── qualification.py             # محاسبه رنج‌های صلاحیت طبق ASME IX
+│   └── report_builder.py            # ساخت خروجی اکسل از روی qualification_id (بدون وابستگی به context مکالمه)
+│
+├── forms/
+│   ├── __init__.py
+│   └── wqt_excel.py                 # فرمت‌دهی سلول‌ها / منطق نمایش فرم WPQ
+│
+├── handlers/                         # لایه رابط تلگرام (مکالمات و کیبوردها)
+│   ├── __init__.py
+│   ├── auth.py                      # ورود و سطوح دسترسی
+│   ├── access_management.py         # اعطا/مدیریت سطوح دسترسی (سطح ۱/۲/۳)
+│   ├── menu.py
+│   ├── keyboards.py
+│   ├── projects.py                  # CRUD پروژه (ایجاد/ویرایش/خاتمه/فعال‌سازی)
+│   ├── contractors.py               # CRUD پیمانکار و رابطه پروژه⇆پیمانکار
+│   ├── test_registration.py         # فلوی ثبت آزمون جوشکار (ASME IX)
+│   └── welders.py
+│
+├── utils/
+│   ├── __init__.py
+│   ├── dates.py
+│   └── validators.py
+│
+├── media/
+│   ├── photos/                      # عکس‌های ثبت‌شده جوشکاران
+│   ├── exports/                     # خروجی‌های تولیدشده (اکسل و ...)
+│   └── templates/
+│       └── WPQ_template.xlsx        # قالب رسمی فرم WPQ
+│
+├── logs/
+│   └── welderbot.log
+│
+└── audit_imports.py

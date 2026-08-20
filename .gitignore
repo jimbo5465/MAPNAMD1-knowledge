@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual Environment
+.venv/
+
+# Logs
+logs/
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+
+# Photos & Exports
+media/kn_photos/
+media/exports/
+
+# Environment
+.env
+
+# فایل سرویس systemd — شامل توکن است و نباید در گیت ثبت شود
+*.service
+
+# IDE
+.vscode/
+.idea/
+
+# Backup
+backups/
+*.bak_*
+patch_*.py
