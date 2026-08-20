@@ -167,12 +167,19 @@ async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_T
         logger.info("مشاهده جدید ثبت شد: #%d توسط %d", obs_id, user.id)
     except Exception:
         logger.exception("خطا در ثبت مشاهده")
-        await update.message.reply_text("❌ خطا در ثبت مشاهده. دوباره تلاش کنید.")
+        if update.message:
+            await update.message.reply_text("❌ خطا در ثبت مشاهده. دوباره تلاش کنید.")
         return OBS_CONTENT
 
     context.user_data["obs_saved_id"] = obs_id
 
-    await update.message.reply_text(
+    # effective_message هم برای پیام عادی و هم برای callback query کار می‌کند
+    target = update.effective_message
+    if target is None:
+        logger.error("پیام مؤثر یافت نشد — نمی‌توان تأیید را ارسال کرد")
+        return ConversationHandler.END
+
+    await target.reply_text(
         f"✅ *مشاهده ثبت شد* (#{obs_id})\n\n"
         f"_{text[:200]}_\n\n"
         "آیا می‌خواهید ضمیمه‌ای (عکس، PDF، فایل) اضافه کنید؟",
