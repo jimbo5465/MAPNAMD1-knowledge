@@ -18,6 +18,7 @@ data/*.db
 # Photos & Exports
 media/kn_photos/
 media/exports/
+media/obs_attachments/
 
 # Environment
 .env
