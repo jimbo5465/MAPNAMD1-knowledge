@@ -28,6 +28,82 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_knowledge_phase3(cur: sqlite3.Cursor) -> None:
+    """idempotent migration برای فاز۳ دانش."""
+    cols = [row[1] for row in cur.execute("PRAGMA table_info(knowledge_entries)").fetchall()]
+    if not cols:
+        return
+
+    needs_rebuild = False
+
+    if "interview_history_json" not in cols:
+        cur.execute("ALTER TABLE knowledge_entries ADD COLUMN interview_history_json TEXT")
+    if "tree_path_json" not in cols:
+        cur.execute("ALTER TABLE knowledge_entries ADD COLUMN tree_path_json TEXT")
+    if "org_metadata_json" not in cols:
+        cur.execute("ALTER TABLE knowledge_entries ADD COLUMN org_metadata_json TEXT")
+
+    # Check if project_id or contractor_id are NOT NULL
+    table_info = cur.execute("PRAGMA table_info(knowledge_entries)").fetchall()
+    for row in table_info:
+        if row[1] in ("project_id", "contractor_id"):
+            if row[3] == 1:  # notnull is 1
+                needs_rebuild = True
+
+    if needs_rebuild:
+        cur.execute("PRAGMA foreign_keys = OFF")
+
+        cur.execute(
+            """
+            CREATE TABLE knowledge_entries_new (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                kn_number                TEXT UNIQUE,
+                project_id               INTEGER,
+                contractor_id            INTEGER,
+                status                   TEXT NOT NULL DEFAULT 'draft'
+                                         CHECK (status IN ('draft', 'submitted')),
+                knowledge_type           TEXT NOT NULL
+                                         CHECK (knowledge_type IN ('lesson','suggestion','explicit')),
+                reporter_name            TEXT NOT NULL,
+                reporter_title           TEXT,
+                reported_by              INTEGER NOT NULL REFERENCES users(id),
+                raw_description          TEXT,
+                fields_json              TEXT,
+                draft_text               TEXT,
+                reported_date            TEXT,
+                submitted_at             TEXT,
+                pdf_path                 TEXT,
+                docx_path                TEXT,
+                is_active                INTEGER NOT NULL DEFAULT 1
+                                         CHECK (is_active IN (0, 1)),
+                created_at               TEXT NOT NULL,
+                interview_history_json   TEXT,
+                tree_path_json           TEXT,
+                org_metadata_json        TEXT,
+                extra_data               TEXT
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO knowledge_entries_new
+            SELECT id, kn_number, project_id, contractor_id, status, knowledge_type,
+                   reporter_name, reporter_title, reported_by, raw_description,
+                   fields_json, draft_text, reported_date, submitted_at, pdf_path,
+                   docx_path, is_active, created_at, interview_history_json, tree_path_json, org_metadata_json, extra_data
+            FROM knowledge_entries
+            """
+        )
+
+        cur.execute("DROP TABLE knowledge_entries")
+        cur.execute("ALTER TABLE knowledge_entries_new RENAME TO knowledge_entries")
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_entries_status ON knowledge_entries(status)")
+
+        cur.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db() -> None:
     """ساخت تمام جداول لازم (idempotent — اجرای مکرر بی‌خطر است)."""
     with get_connection() as conn:
@@ -85,6 +161,9 @@ def init_db() -> None:
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_entries_status ON knowledge_entries(status)")
+
+        # ── Migration دانش فاز ۳ ──────────────────────────────────────────
+        _migrate_knowledge_phase3(cur)
 
         # ── عکس‌های ثبت دانش ─────────────────────────────────────────────
         cur.execute(
