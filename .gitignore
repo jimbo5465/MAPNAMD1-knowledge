@@ -23,6 +23,9 @@ media/obs_attachments/
 # Environment
 .env
 
+# اسکریپت اجرای محلی بله — شامل توکن است و نباید در گیت ثبت شود
+run_bale.bat
+
 # فایل سرویس systemd — شامل توکن است و نباید در گیت ثبت شود
 *.service
 
