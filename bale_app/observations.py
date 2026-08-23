@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -57,6 +58,43 @@ logger = logging.getLogger(__name__)
 ) = range(9)
 
 _OBS_TMP_DIR = os.path.join(tempfile.gettempdir(), "knowledgebot_bale_obs")
+
+# تجمیع پیام تأیید پیوست‌ها — کاربر چند عکس پشت‌سرهم بفرستد فقط یک پیام خلاصه می‌رود
+_ATTACH_FLUSH_DELAY = 2.5
+_attach_pending: dict[int, dict] = {}  # user_id -> {"photo": n, "file": n, "_task": Task}
+
+
+async def _flush_attachments_notice(msg, context, user_id: int) -> None:
+    """پس از مکث کوتاه، یک پیام جمعی برای همهٔ پیوست‌های تازه ذخیره‌شده می‌فرستد."""
+    try:
+        await asyncio.sleep(_ATTACH_FLUSH_DELAY)
+    except asyncio.CancelledError:
+        return
+    slot = _attach_pending.pop(user_id, None)
+    if not slot:
+        return
+    n_photo = slot.get("photo", 0)
+    n_file = slot.get("file", 0)
+    total = n_photo + n_file
+    if total <= 0:
+        return
+
+    parts = []
+    if n_photo:
+        parts.append(f"🖼️ {n_photo} عکس")
+    if n_file:
+        parts.append(f"📎 {n_file} فایل")
+    summary = " و ".join(parts)
+
+    obs_id = context.user_data.get("obs_attach_obs_id") or context.user_data.get("obs_saved_id")
+    try:
+        await msg.reply_text(
+            f"✅ {summary} ({total} مورد) ذخیره شد.\n\n"
+            "می‌توانید پیوست دیگری اضافه کنید یا تمام کنید.",
+            reply_markup=_attachments_confirm_keyboard(obs_id),
+        )
+    except Exception:
+        logger.exception("خطا در ارسال پیام جمعی پیوست‌ها")
 
 
 def _status_label(status: str) -> str:
@@ -557,11 +595,16 @@ async def obs_attachment_received(update, context) -> int:
         await update.message.reply_text("❌ خطا در دریافت پیوست. دوباره تلاش کنید.")
         return OBS_ATTACHMENTS
 
-    type_label = "🖼️ عکس" if mime_type and mime_type.startswith("image") else "📎 فایل"
-    await update.message.reply_text(
-        f"✅ {type_label} ذخیره شد.\n\n"
-        "می‌توانید پیوست دیگری اضافه کنید یا تمام کنید.",
-        reply_markup=_attachments_confirm_keyboard(obs_id),
+    # پیام تأیید فوری نمی‌فرستیم — با مکث کوتاه تجمیع می‌شود
+    kind = "photo" if mime_type and mime_type.startswith("image") else "file"
+    uid = update.effective_user.id if update.effective_user else 0
+    slot = _attach_pending.setdefault(uid, {})
+    slot[kind] = slot.get(kind, 0) + 1
+    old_task = slot.get("_task")
+    if old_task:
+        old_task.cancel()
+    slot["_task"] = asyncio.create_task(
+        _flush_attachments_notice(update.message, context, uid)
     )
     return OBS_ATTACHMENTS
 

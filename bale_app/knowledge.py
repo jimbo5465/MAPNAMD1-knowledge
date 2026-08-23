@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -1090,6 +1091,34 @@ def _choose_photo(photos):
     return photos[-1]
 
 
+# تجمیع پیام تأیید عکس‌ها — کاربر چند عکس پشت‌سرهم بفرستد فقط یک پیام خلاصه می‌رود
+_KN_PHOTO_FLUSH_DELAY = 2.5
+_kn_photo_pending: dict[int, dict] = {}  # user_id -> {"count": n, "_task": Task}
+
+
+async def _flush_kn_photo_notice(msg, context, user_id: int) -> None:
+    """پس از مکث کوتاه، یک پیام جمعی برای عکس‌های تازه ذخیره‌شده می‌فرستد."""
+    try:
+        await asyncio.sleep(_KN_PHOTO_FLUSH_DELAY)
+    except asyncio.CancelledError:
+        return
+    slot = _kn_photo_pending.pop(user_id, None)
+    if not slot:
+        return
+    count = slot.get("count", 0)
+    if count <= 0:
+        return
+    total = len(context.user_data.get("kn_photos", []))
+    try:
+        await msg.reply_text(
+            f"✅ {count} عکس جدید ذخیره شد (مجموع: {total}).\n"
+            "اگر عکس دیگری هست بفرستید، وگرنه «پایان عکس‌ها» را بزنید.",
+            reply_markup=_photos_done_keyboard(),
+        )
+    except Exception:
+        logger.exception("خطا در ارسال پیام جمعی عکس‌های دانش")
+
+
 async def kn_photo_received(update, context) -> int:
     """عکس‌ها در پوشهٔ pending نگه داشته و هنگام ثبت نهایی منتقل می‌شوند."""
     try:
@@ -1108,9 +1137,15 @@ async def kn_photo_received(update, context) -> int:
         photos_list = context.user_data.setdefault("kn_photos", [])
         photos_list.append(full_path)
 
-        await update.message.reply_text(
-            f"✅ عکس {len(photos_list)} ذخیره شد. اگر عکس دیگری هست بفرستید، وگرنه «پایان عکس‌ها» را بزنید.",
-            reply_markup=_photos_done_keyboard(),
+        # پیام تأیید فوری نمی‌فرستیم — با مکث کوتاه تجمیع می‌شود
+        uid = update.effective_user.id if update.effective_user else 0
+        slot = _kn_photo_pending.setdefault(uid, {})
+        slot["count"] = slot.get("count", 0) + 1
+        old_task = slot.get("_task")
+        if old_task:
+            old_task.cancel()
+        slot["_task"] = asyncio.create_task(
+            _flush_kn_photo_notice(update.message, context, uid)
         )
         return KN_PHOTOS
     except Exception:
