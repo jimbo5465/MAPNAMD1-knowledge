@@ -34,6 +34,11 @@ from bale_app.framework import (
     filters,
 )
 from bale_app.keyboards import back_to_main_keyboard
+from bale_app.jalali_calendar import (
+    build_calendar_keyboard,
+    parse_pick_data,
+    parse_view_data,
+)
 from utils.busy_lock import clear_busy, is_busy, set_busy
 from utils.dates import (
     gregorian_to_jalali_display,
@@ -173,6 +178,14 @@ def _skip_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _date_entry_keyboard() -> InlineKeyboardMarkup:
+    """کیبورد مرحلهٔ تاریخ — تقویم یا رد کردن."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 انتخاب از تقویم", callback_data="obsdate:open")],
+        [InlineKeyboardButton("⏭ رد کردن", callback_data="obs:skip")],
+    ])
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # شروع ثبت مشاهده
 # ══════════════════════════════════════════════════════════════════════════════
@@ -291,9 +304,9 @@ async def obs_tags_received(update, context) -> int:
     await update.message.reply_text(
         f"✅ هشتگ‌ها ثبت شد: {' '.join('#' + t for t in tags)}\n\n"
         f"📅 *تاریخ مشاهده* (اختیاری):\n"
-        f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، یا رد کنید (پیش‌فرض: {now_str}).",
+        f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، از تقویم انتخاب کنید، یا رد کنید (پیش‌فرض: {now_str}).",
         parse_mode="Markdown",
-        reply_markup=_skip_keyboard(),
+        reply_markup=_date_entry_keyboard(),
     )
     return OBS_DATE
 
@@ -308,9 +321,9 @@ async def obs_tags_skip(update, context) -> int:
     await query.edit_message_text(
         "⏭ هشتگ ثبت نشد.\n\n"
         f"📅 *تاریخ مشاهده* (اختیاری):\n"
-        f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، یا رد کنید (پیش‌فرض: {now_str}).",
+        f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، از تقویم انتخاب کنید، یا رد کنید (پیش‌فرض: {now_str}).",
         parse_mode="Markdown",
-        reply_markup=_skip_keyboard(),
+        reply_markup=_date_entry_keyboard(),
     )
     return OBS_DATE
 
@@ -358,6 +371,70 @@ async def obs_date_skip(update, context) -> int:
     if obs_id:
         update_observation(obs_id, obs_date=greg_date)
     context.user_data["obs_date_jalali"] = now_str
+    return await _obs_final_confirm(update, context)
+
+
+# ── تقویم جلالی ──
+
+@require_registration
+async def obs_cal_open(update, context) -> int:
+    """باز کردن تقویم برای انتخاب تاریخ مشاهده."""
+    query = update.callback_query
+    await query.answer()
+    today = jdatetime.date.today()
+    context.user_data["obs_cal_view"] = [today.year, today.month]
+    await query.edit_message_text(
+        "📅 *انتخاب تاریخ مشاهده* — روز موردنظر را بزنید:",
+        parse_mode="Markdown",
+        reply_markup=build_calendar_keyboard("obsdate", today.year, today.month),
+    )
+    return OBS_DATE
+
+
+@require_registration
+async def obs_cal_nav(update, context) -> int:
+    """ناوبری ماه/سال در تقویم."""
+    query = update.callback_query
+    await query.answer()
+    parsed = parse_view_data(query.data or "")
+    if not parsed:
+        return OBS_DATE
+    year, month = parsed
+    context.user_data["obs_cal_view"] = [year, month]
+    await query.edit_message_text(
+        "📅 *انتخاب تاریخ مشاهده* — روز موردنظر را بزنید:",
+        parse_mode="Markdown",
+        reply_markup=build_calendar_keyboard("obsdate", year, month),
+    )
+    return OBS_DATE
+
+
+@require_registration
+async def obs_cal_none(update, context) -> int:
+    """کلیک روی سلول غیرفعال — هیچ کاری نکن."""
+    try:
+        await update.callback_query.answer()
+    except Exception:
+        pass
+    return OBS_DATE
+
+
+@require_registration
+async def obs_cal_pick(update, context) -> int:
+    """انتخاب روز از تقویم — همان مسیر ورودی متنی."""
+    query = update.callback_query
+    await query.answer()
+    parsed = parse_pick_data(query.data or "")
+    if not parsed:
+        return OBS_DATE
+    year, month, day = parsed
+    raw = f"{year}/{month:02d}/{day:02d}"
+
+    greg_date = jalali_to_gregorian(raw)
+    obs_id = context.user_data.get("obs_saved_id")
+    if obs_id:
+        update_observation(obs_id, obs_date=greg_date)
+    context.user_data["obs_date_jalali"] = raw
     return await _obs_final_confirm(update, context)
 
 
@@ -1055,6 +1132,10 @@ def get_observations_conversation_handler() -> ConversationHandler:
             OBS_DATE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, obs_date_received),
                 CallbackQueryHandler(obs_date_skip, pattern=r"^obs:skip$"),
+                CallbackQueryHandler(obs_cal_open, pattern=r"^obsdate:open$"),
+                CallbackQueryHandler(obs_cal_nav, pattern=r"^obsdate:view:\d+:\d+$"),
+                CallbackQueryHandler(obs_cal_none, pattern=r"^obsdate:none$"),
+                CallbackQueryHandler(obs_cal_pick, pattern=r"^obsdate:pick:\d+:\d+:\d+$"),
             ],
             OBS_SEARCH: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, obs_search_query),

@@ -45,6 +45,11 @@ from bale_app.framework import (
     filters,
 )
 from bale_app.keyboards import main_menu_keyboard
+from bale_app.jalali_calendar import (
+    build_calendar_keyboard,
+    parse_pick_data,
+    parse_view_data,
+)
 from utils.busy_lock import clear_busy, is_busy, set_busy
 from utils.dates import validate_jalali_date_str
 from engine.knowledge_ai import extract_fields, FIELD_SCHEMAS, TYPE_LABELS
@@ -512,7 +517,8 @@ def _photos_done_keyboard() -> InlineKeyboardMarkup:
 def _date_keyboard() -> InlineKeyboardMarkup:
     today = jdatetime.date.today().strftime("%Y/%m/%d")
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📅 امروز ({today})", callback_data="kn_today")]
+        [InlineKeyboardButton("📅 انتخاب از تقویم", callback_data="kndate:open")],
+        [InlineKeyboardButton(f"📅 امروز ({today})", callback_data="kn_today")],
     ])
 
 
@@ -1187,6 +1193,61 @@ async def kn_date_today(update, context) -> int:
     """callback_data: kn_today"""
     await update.callback_query.answer()
     context.user_data["kn_date"] = jdatetime.date.today().strftime("%Y/%m/%d")
+    msg = update.callback_query.message
+    return await _save_and_preview(msg, context)
+
+
+# ── تقویم جلالی ──
+
+_KN_CAL_CAPTION = "📅 *انتخاب تاریخ ثبت* — روز موردنظر را بزنید:"
+
+
+async def kn_cal_open(update, context) -> int:
+    """باز کردن تقویم برای انتخاب تاریخ ثبت دانش."""
+    await update.callback_query.answer()
+    today = jdatetime.date.today()
+    context.user_data["kn_cal_view"] = [today.year, today.month]
+    await update.callback_query.edit_message_text(
+        _KN_CAL_CAPTION,
+        parse_mode="Markdown",
+        reply_markup=build_calendar_keyboard("kndate", today.year, today.month),
+    )
+    return KN_DATE
+
+
+async def kn_cal_nav(update, context) -> int:
+    """ناوبری ماه/سال در تقویم."""
+    await update.callback_query.answer()
+    parsed = parse_view_data(update.callback_query.data or "")
+    if not parsed:
+        return KN_DATE
+    year, month = parsed
+    context.user_data["kn_cal_view"] = [year, month]
+    await update.callback_query.edit_message_text(
+        _KN_CAL_CAPTION,
+        parse_mode="Markdown",
+        reply_markup=build_calendar_keyboard("kndate", year, month),
+    )
+    return KN_DATE
+
+
+async def kn_cal_none(update, context) -> int:
+    """کلیک روی سلول غیرفعال — هیچ کاری نکن."""
+    try:
+        await update.callback_query.answer()
+    except Exception:
+        pass
+    return KN_DATE
+
+
+async def kn_cal_pick(update, context) -> int:
+    """انتخاب روز از تقویم — همان مسیر ورودی متنی/امروز."""
+    await update.callback_query.answer()
+    parsed = parse_pick_data(update.callback_query.data or "")
+    if not parsed:
+        return KN_DATE
+    year, month, day = parsed
+    context.user_data["kn_date"] = f"{year}/{month:02d}/{day:02d}"
     msg = update.callback_query.message
     return await _save_and_preview(msg, context)
 
@@ -2513,6 +2574,10 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_date),
                 MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_date)),
                 CallbackQueryHandler(kn_date_today, pattern=r"^kn_today$"),
+                CallbackQueryHandler(kn_cal_open, pattern=r"^kndate:open$"),
+                CallbackQueryHandler(kn_cal_nav, pattern=r"^kndate:view:\d+:\d+$"),
+                CallbackQueryHandler(kn_cal_none, pattern=r"^kndate:none$"),
+                CallbackQueryHandler(kn_cal_pick, pattern=r"^kndate:pick:\d+:\d+:\d+$"),
             ],
         },
         fallbacks=[
