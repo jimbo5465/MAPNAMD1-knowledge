@@ -487,6 +487,9 @@ class ConversationHandler:
                     state: Optional[int]) -> Tuple[bool, Optional[int]]:
         if state is not None and state != self.END:
             entries: List[Any] = list(self.states.get(state, [])) + list(self.fallbacks)
+            if self.allow_reentry:
+                # مطابق PTB: در حالت فعال هم entry_points بعد از states/fallbacks بررسی شوند
+                entries += list(self.entry_points)
         elif state is not None and state == self.END:
             # پایان رسمی — فقط entry مجدد (allow_reentry) یا fallback
             entries = (list(self.entry_points) if self.allow_reentry else []) \
@@ -571,6 +574,8 @@ class Dispatcher:
             # ── group 1: هندلرهای مستقل ──
             for entry in self.standalone:
                 if entry.check(update):
+                    # دکمه‌های سراسری (مثل menu:main) یعنی خروج از هر flow فعال
+                    self._states.pop(user_key, None)
                     await entry.callback(update, context)
                     return
 

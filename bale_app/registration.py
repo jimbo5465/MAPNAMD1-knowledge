@@ -372,4 +372,5 @@ def get_registration_conversation_handler() -> ConversationHandler:
         per_message=False,
         name="user_registration",
         persistent=False,
+        allow_reentry=True,
     )

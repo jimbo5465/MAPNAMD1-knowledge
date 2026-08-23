@@ -2487,4 +2487,5 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
         per_message=False,
         name="knowledge_registration",
         persistent=False,
+        allow_reentry=True,
     )

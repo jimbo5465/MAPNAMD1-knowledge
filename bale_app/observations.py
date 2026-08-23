@@ -1023,4 +1023,5 @@ def get_observations_conversation_handler() -> ConversationHandler:
         per_message=False,
         name="observations",
         persistent=False,
+        allow_reentry=True,
     )

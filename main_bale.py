@@ -128,6 +128,11 @@ async def unknown_message_handler(update, context) -> None:
 
 async def unknown_callback_handler(update, context) -> None:
     if update.callback_query and update.callback_query.message:
+        logger.warning(
+            "callback ناشناخته دریافت شد: %r (کاربر %s)",
+            update.callback_query.data,
+            update.effective_user.id if update.effective_user else "?",
+        )
         # در بله alert دکمه‌ای وجود ندارد — پیام مستقیم ارسال می‌شود
         await update.callback_query.message.reply_text(
             "⚠️ این دکمه دیگر معتبر نیست. لطفاً /start را بزنید.",
