@@ -1285,9 +1285,9 @@ async def _save_and_preview(msg, context) -> int:
     عکس‌ها به پوشهٔ نهایی منتقل می‌شوند و پیش‌نمایش DANA نشان داده می‌شود.
     """
     try:
-        # پرامپت قبلی (تاریخ/تقویم/عکس‌ها) حذف شود
+        # پرامپت قبلی (تاریخ/تقویم/عکس‌ها) و خلاصهٔ پیوست‌ها حذف شوند
         await delete_tracked(context)
-        context.user_data.pop("_attach_summary", None)
+        await delete_tracked(context, "_attach_summary")
 
         chat_id = msg.chat_id if msg.chat else None
 
@@ -2516,7 +2516,7 @@ async def _cancel_knowledge_conv(update, context) -> int:
         if key.startswith("kn_") or key.startswith("_KEY_"):
             context.user_data.pop(key, None)
     await delete_tracked(context)
-    context.user_data.pop("_attach_summary", None)
+    await delete_tracked(context, "_attach_summary")
     telegram_id = update.effective_user.id
     if update.message:
         await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_keyboard(telegram_id))

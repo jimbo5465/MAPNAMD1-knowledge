@@ -470,9 +470,9 @@ async def _obs_final_confirm(update, context) -> int:
     if target is None:
         return ConversationHandler.END
 
-    # پرامپت قبلی (تاریخ/تقویم) حذف شود
+    # پرامپت قبلی (تاریخ/تقویم) و خلاصهٔ قبلی پیوست‌ها حذف شوند
     await delete_tracked(context)
-    context.user_data.pop("_attach_summary", None)
+    await delete_tracked(context, "_attach_summary")
     context.user_data["obs_attach_prompt_cleaned"] = False
 
     sent = await target.reply_text(
