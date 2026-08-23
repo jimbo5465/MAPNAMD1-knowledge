@@ -140,9 +140,12 @@ async def menu_main_handler(update: Update, context) -> None:
     """بازگشت به منوی اصلی."""
     from handlers.auth import is_registered
     from handlers.keyboards import main_menu_keyboard
+    from handlers.prompt_cleanup import delete_tracked
 
     user = update.effective_user
     if not user or not is_registered(user.id):
+        # فرم/پرامپت رهاشده حذف شود
+        await delete_tracked(context)
         from handlers.registration import start_registration
         await start_registration(update, context)
         return
@@ -150,6 +153,7 @@ async def menu_main_handler(update: Update, context) -> None:
     query = update.callback_query
     if query:
         await query.answer()
+        await delete_tracked(context)
         await query.edit_message_text(
             "🏠 *منوی اصلی* — ربات دانش سازمانی مپنا توسعه یک\n\n"
             "از گزینه‌های زیر انتخاب کنید:",

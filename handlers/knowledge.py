@@ -64,6 +64,11 @@ from handlers.jalali_calendar import (
     parse_pick_data,
     parse_view_data,
 )
+from handlers.prompt_cleanup import (
+    track_prompt,
+    delete_tracked,
+    prompt_reply,
+)
 from utils.busy_lock import clear_busy, is_busy, set_busy
 from utils.dates import validate_jalali_date_str
 from engine.knowledge_ai import extract_fields, FIELD_SCHEMAS, TYPE_LABELS
@@ -71,6 +76,14 @@ from engine.knowledge_draft import build_report, render_text
 from engine.knowledge_render import render_dana_pdf, render_dana_docx
 
 logger = logging.getLogger(__name__)
+
+
+async def _prompt_reply(target, context, text, reply_markup=None):
+    """پرامپت قبلی حذف، پیام جدید ارسال و track میشود — چت تمیز میماند."""
+    await delete_tracked(context)
+    sent = await target.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    track_prompt(context, sent)
+    return sent
 
 # ══════════════════════════════════════════════════════════════════════════════
 # state ها
@@ -580,6 +593,8 @@ async def kn_mode_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 "(شروع جدید ثبت قبلی را غیرفعال میکند.)",
                 reply_markup=kb,
             )
+            if query.message:
+                track_prompt(context, query.message)
             return KN_MODE_SELECT
 
         from engine.knowledge_ai import is_ai_enabled
@@ -591,6 +606,8 @@ async def kn_mode_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             parse_mode="Markdown",
             reply_markup=kb,
         )
+        if query.message:
+            track_prompt(context, query.message)
         return KN_MODE_SELECT
 
     except Exception:
@@ -813,10 +830,11 @@ async def kn_reporter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         name = _clean_text(_input_text(update, context), _MAX_NAME)
         if name is None:
-            await update.message.reply_text("❌ نام نامعتبر است. دوباره وارد کنید:")
+            await prompt_reply(update.message, context, "❌ نام نامعتبر است. دوباره وارد کنید:")
             return KN_REPORTER_NAME
         context.user_data["kn_reporter_name"] = name
-        await update.message.reply_text(
+        await prompt_reply(
+            update.message, context,
             "💼 سمت گزارش‌دهنده را وارد کنید (مثلاً «سرپرست شیفت»)، یا رد کنید:",
             reply_markup=_skip_title_keyboard(),
         )
@@ -830,10 +848,11 @@ async def kn_reporter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def kn_reporter_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     value = _clean_text(_input_text(update, context), _MAX_NAME)
     if value is None:
-        await update.message.reply_text("❌ سمت نامعتبر است. دوباره وارد کنید:")
+        await prompt_reply(update.message, context, "❌ سمت نامعتبر است. دوباره وارد کنید:")
         return KN_REPORTER_TITLE
     context.user_data["kn_reporter_title"] = value
-    await update.message.reply_text(
+    await prompt_reply(
+        update.message, context,
         "📚 نوع دانش را انتخاب کنید:",
         reply_markup=InlineKeyboardMarkup(_type_buttons()),
     )
@@ -899,13 +918,14 @@ async def kn_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """شرح آزاد ← استخراج با AI ← [تأیید طبقه‌بندی] ← پرسش فیلدهای ناقص."""
     desc = _clean_text(_input_text(update, context), _MAX_DESC)
     if desc is None:
-        await update.message.reply_text(
-            f"❌ شرح نامعتبر است (حداکثر {_MAX_DESC} کاراکتر). دوباره بنویسید:"
+        await prompt_reply(
+            update.message, context,
+            f"❌ شرح نامعتبر است (حداکثر {_MAX_DESC} کاراکتر). دوباره بنویسید:",
         )
         return KN_DESCRIPTION
     context.user_data["kn_description"] = desc
 
-    await update.message.reply_text("🔄 در حال استخراج فیلدها با هوش مصنوعی...")
+    await prompt_reply(update.message, context, "🔄 در حال استخراج فیلدها با هوش مصنوعی...")
 
     knowledge_type = context.user_data.get("kn_type")
     result = await extract_fields(knowledge_type, desc)
@@ -928,7 +948,7 @@ async def kn_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         summary.append("")
         summary.append("✍️ فیلدهای زیر در شرح مشخص نبودند — یک‌به‌یک پاسخ دهید:")
     if summary:
-        await update.message.reply_text("\n".join(summary), parse_mode="Markdown")
+        await prompt_reply(update.message, context, "\n".join(summary))
 
     # پیشنهاد طبقه‌بندی AI (مطابق knowledge-classification.md) —
     # اگر با انتخاب اپراتور تعارض دارد، تأیید بگیر
@@ -950,8 +970,8 @@ async def kn_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 + ".\n\n"
                 f"شما «{current_label}» را انتخاب کرده بودید. کدام را ثبت کنیم؟"
             )
-        await update.message.reply_text(msg, parse_mode="Markdown",
-                                        reply_markup=_type_conflict_keyboard(recommended))
+        await prompt_reply(update.message, context, msg,
+                           reply_markup=_type_conflict_keyboard(recommended))
         return KN_TYPE_CONFIRM
 
     return await _continue_after_extraction(update.message, context)
@@ -1013,7 +1033,7 @@ async def kn_type_switch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if result["missing"]:
             summary.append("")
             summary.append("✍️ فیلدهای مشخص‌نشده یک‌به‌یک پرسیده می‌شوند:")
-        await query.message.reply_text("\n".join(summary), parse_mode="Markdown")
+        await prompt_reply(query.message, context, "\n".join(summary))
 
         return await _continue_after_extraction(query.message, context)
     except Exception:
@@ -1046,19 +1066,19 @@ async def _ask_next_field(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # «تاثیر اجرای پیشنهاد» یک انتخاب دوگانه است نه متن آزاد
     if key == "impact_type":
-        await msg.reply_text(
+        await prompt_reply(
+            msg, context,
             "📊 *تاثیر اجرای پیشنهاد* چیست؟\n"
             "«کیفی» = اثر بدون رقم مشخص | «کمی» = اثر با عدد/درصد/مبلغ",
-            parse_mode="Markdown",
             reply_markup=_impact_keyboard(),
         )
         return KN_FIELD_ANSWER
 
     knowledge_type = context.user_data.get("kn_type")
     label = FIELD_SCHEMAS.get(knowledge_type, {}).get(key, key)
-    await msg.reply_text(
+    await prompt_reply(
+        msg, context,
         f"✍️ *{label}* را وارد کنید:",
-        parse_mode="Markdown",
         reply_markup=_field_skip_keyboard(),
     )
     return KN_FIELD_ANSWER
@@ -1069,8 +1089,9 @@ async def kn_field_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         value = _clean_text(_input_text(update, context), _MAX_FIELD)
         if value is None:
-            await update.message.reply_text(
-                f"❌ پاسخ نامعتبر است (حداکثر {_MAX_FIELD} کاراکتر). دوباره بنویسید:"
+            await prompt_reply(
+                update.message, context,
+                f"❌ پاسخ نامعتبر است (حداکثر {_MAX_FIELD} کاراکتر). دوباره بنویسید:",
             )
             return KN_FIELD_ANSWER
         key = context.user_data.get("kn_current_field")
@@ -1098,12 +1119,47 @@ async def _open_photos(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
     """مرحلهٔ عکس‌ها (اختیاری)."""
     photos = context.user_data.setdefault("kn_photos", [])
     count_text = f" ({len(photos)} عکس ثبت شد)" if photos else ""
-    await msg.reply_text(
+    await prompt_reply(
+        msg, context,
         "📸 عکس‌های مرتبط با تجربه را بفرستید (اختیاری، چندتایی هم می‌توانید).\n"
         f"بعد از اتمام، دکمهٔ «پایان عکس‌ها» را بزنید.{count_text}",
         reply_markup=_photos_done_keyboard(),
     )
+    context.user_data["kn_attach_cleaned"] = False
     return KN_PHOTOS
+
+
+# تجمیع پیام تأیید عکس‌ها — کاربر چند عکس پشت‌سرهم بفرستد فقط یک پیام خلاصه می‌رود
+_KN_PHOTO_FLUSH_DELAY = 2.5
+_kn_photo_pending: dict = {}  # user_id -> {"count": n, "_task": Task}
+
+
+async def _flush_kn_photo_notice(msg, context, user_id: int) -> None:
+    """پس از مکث کوتاه، یک پیام جمعی برای عکس‌های تازه ذخیره‌شده می‌فرستد."""
+    import asyncio
+
+    try:
+        await asyncio.sleep(_KN_PHOTO_FLUSH_DELAY)
+    except asyncio.CancelledError:
+        return
+    slot = _kn_photo_pending.pop(user_id, None)
+    if not slot:
+        return
+    count = slot.get("count", 0)
+    if count <= 0:
+        return
+    total = len(context.user_data.get("kn_photos", []))
+    # خلاصهٔ قبلی حذف و جدید جایگزین شود
+    await delete_tracked(context, "_attach_summary")
+    try:
+        sent = await msg.reply_text(
+            f"✅ {count} عکس جدید ذخیره شد (مجموع: {total}).\n"
+            "اگر عکس دیگری هست بفرستید، وگرنه «پایان عکس‌ها» را بزنید.",
+            reply_markup=_photos_done_keyboard(),
+        )
+        track_prompt(context, sent, "_attach_summary")
+    except Exception:
+        logger.exception("خطا در ارسال پیام جمعی عکس‌های دانش")
 
 
 async def kn_photo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1126,9 +1182,21 @@ async def kn_photo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         photos = context.user_data.setdefault("kn_photos", [])
         photos.append(full_path)
 
-        await update.message.reply_text(
-            f"✅ عکس {len(photos)} ذخیره شد. اگر عکس دیگری هست بفرستید، وگرنه «پایان عکس‌ها» را بزنید.",
-            reply_markup=_photos_done_keyboard(),
+        # اولین عکس: پرامپت مرحلهٔ عکس‌ها حذف شود
+        if not context.user_data.get("kn_attach_cleaned"):
+            await delete_tracked(context)
+            context.user_data["kn_attach_cleaned"] = True
+
+        # پیام تأیید فوری نمی‌فرستیم — با مکث کوتاه تجمیع می‌شود
+        uid = update.effective_user.id if update.effective_user else 0
+        slot = _kn_photo_pending.setdefault(uid, {})
+        slot["count"] = slot.get("count", 0) + 1
+        old_task = slot.get("_task")
+        if old_task:
+            old_task.cancel()
+        import asyncio
+        slot["_task"] = asyncio.create_task(
+            _flush_kn_photo_notice(update.message, context, uid)
         )
         return KN_PHOTOS
     except Exception:
@@ -1155,11 +1223,11 @@ async def kn_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def kn_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     value = _clean_text(update.message.text, 30)
     if not value:
-        await update.message.reply_text("❌ تاریخ خالی است. دوباره وارد کنید:")
+        await prompt_reply(update.message, context, "❌ تاریخ خالی است. دوباره وارد کنید:")
         return KN_DATE
     ok, _err = validate_jalali_date_str(value)
     if not ok:
-        await update.message.reply_text("❌ تاریخ نامعتبر است. مثال: ۱۴۰۴/۰۵/۱۲")
+        await prompt_reply(update.message, context, "❌ تاریخ نامعتبر است. مثال: ۱۴۰۴/۰۵/۱۲")
         return KN_DATE
     normalized = value.replace("-", "/")
     context.user_data["kn_date"] = normalized
@@ -1242,6 +1310,10 @@ async def _save_and_preview(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
     عکس‌ها به پوشهٔ نهایی منتقل می‌شوند و پیش‌نمایش DANA نشان داده می‌شود.
     """
     try:
+        # پرامپت قبلی (تاریخ/تقویم/عکس‌ها) و خلاصهٔ پیوست‌ها حذف شوند
+        await delete_tracked(context)
+        await delete_tracked(context, "_attach_summary")
+
         telegram_id = msg.chat.id if msg.chat else None
 
         user = get_user_by_telegram_id(telegram_id) if telegram_id else None
@@ -1310,7 +1382,8 @@ async def _save_and_preview(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
             [InlineKeyboardButton("✅ تأیید و ثبت نهایی", callback_data="kn_finish")],
             [InlineKeyboardButton("❌ انصراف", callback_data="menu:main")],
         ])
-        await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        sent = await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        track_prompt(context, sent)
         return KN_PREVIEW
 
     except Exception:
@@ -1516,7 +1589,7 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
     try:
         user_text = _input_text(update, context).strip()
         if not user_text:
-            await update.message.reply_text("❌ متن خالی است. پاسخ خود را بنویسید:")
+            await prompt_reply(update.message, context, "❌ متن خالی است. پاسخ خود را بنویسید:")
             return KN_INTERVIEW_LOOP
 
         knowledge_type = context.user_data["kn_type"]
@@ -1549,10 +1622,10 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
                     logger.exception("ذخیرهٔ fields ناموفق")
 
             summary = result.get("summary") or "مصاحبه تمام شد."
-            await update.message.reply_text(
+            await prompt_reply(
+                update.message, context,
                 f"✅ مصاحبه تمام شد.\n\n📋 *خلاصه*: {summary}\n\n"
                 "▶️ ادامه برای ساخت فرم نهایی DANA...",
-                parse_mode="Markdown",
             )
             return await _final_assemble_and_preview(context, update.message)
 
@@ -1560,7 +1633,8 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
         if not ask:
             # هیچ سؤالی ساخته نشد — احتمالاً LLM به‌کل شکست خورده؛ به‌جای پیام
             # بی‌هدف «ادامه بدهید»، به کاربر اطلاع بده و بگذار ادامه دهد/خاتمه دهد.
-            await update.message.reply_text(
+            await prompt_reply(
+                update.message, context,
                 "⚠️ هوش مصنوعی نتوانست سؤال بعدی را بسازد. "
                 "لطفاً پاسخ خود را کامل‌تر بنویسید، یا «✓ پایان مصاحبه» را بزنید.",
                 reply_markup=_interview_continue_keyboard(),
@@ -1585,9 +1659,9 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
             except Exception:
                 logger.exception("ذخیرهٔ interview_history ناموفق")
 
-        await update.message.reply_text(
+        await prompt_reply(
+            update.message, context,
             f"🤖 *AI:* {ask}",
-            parse_mode="Markdown",
             reply_markup=_interview_continue_keyboard(),
         )
         return KN_INTERVIEW_LOOP
@@ -1630,7 +1704,7 @@ async def _final_assemble_and_preview(
     try:
         from engine.knowledge_interview import polish_dana_draft
 
-        await msg.reply_text("🔄 در حال ساخت فرم نهایی DANA...")
+        await prompt_reply(msg, context, "🔄 در حال ساخت فرم نهایی DANA...")
         knowledge_type = context.user_data["kn_type"]
         fields = context.user_data.get("kn_fields") or {}
 
@@ -1680,9 +1754,9 @@ async def _final_assemble_and_preview(
             except Exception:
                 logger.exception("ذخیرهٔ draft ناموفق")
 
-        await msg.reply_text(
+        await prompt_reply(
+            msg, context,
             f"✅ فرم DANA آماده شد.\n\n📋 *پیش‌نمایش:*\n\n{draft}",
-            parse_mode="Markdown",
             reply_markup=_preview_keyboard(),
         )
         return KN_PREVIEW
@@ -1867,7 +1941,7 @@ async def kn_org_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         text = (update.message.text or "").strip()
         if not text:
-            await update.message.reply_text("❌ متن خالی است. دوباره بنویسید یا /skip:")
+            await prompt_reply(update.message, context, "❌ متن خالی است. دوباره بنویسید یا /skip:")
             return KN_ORG_META
 
         if field == "hashtags":
@@ -1891,6 +1965,7 @@ async def kn_org_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     logger.exception("ذخیرهٔ org_metadata ناموفق")
 
         context.user_data.pop("kn_org_pending_field", None)
+        await delete_tracked(context)
         await update.message.reply_text(f"✓ `{field}` به‌روز شد.")
         return await _show_org_menu(update, context)
 
@@ -1920,12 +1995,16 @@ async def _show_org_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown",
             reply_markup=kb,
         )
+        if update.callback_query.message:
+            track_prompt(context, update.callback_query.message)
     else:
-        await update.message.reply_text(
+        await delete_tracked(context)
+        sent = await update.message.reply_text(
             "\n".join(text_lines),
             parse_mode="Markdown",
             reply_markup=kb,
         )
+        track_prompt(context, sent)
     return KN_ORG_META
 
 
@@ -2195,13 +2274,15 @@ async def kn_tree_type_done(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         text = (update.message.text or "").strip()
         context.user_data.pop("kn_tree_typing", None)
         if not text or text.startswith("/skip"):
+            await delete_tracked(context)
             await update.message.reply_text("↩️ رد شد.")
             return await _show_org_menu(update, context)
 
         path = [p.strip() for p in text.split(">") if p.strip()]
         from engine.knowledge_tree import validate_path
         if not validate_path(path):
-            await update.message.reply_text(
+            await prompt_reply(
+                update.message, context,
                 "⚠️ مسیر در درخت رسمی یافت نشد. دوباره با /skip رد کنید یا از انتخاب دستی استفاده کنید.",
             )
             return KN_TREE
@@ -2214,6 +2295,7 @@ async def kn_tree_type_done(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             except Exception:
                 logger.exception("ذخیرهٔ tree_path ناموفق")
 
+        await delete_tracked(context)
         await update.message.reply_text(f"✓ مسیر ثبت شد: {' > '.join(path)}")
         return await _show_org_menu(update, context)
     except Exception:
@@ -2402,6 +2484,7 @@ async def kn_edit_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text = (update.message.text or "").strip()
         if not text or text.startswith("/skip"):
             context.user_data.pop("kn_edit_pending_key", None)
+            await delete_tracked(context)
             await update.message.reply_text("↩️ رد شد.")
             return KN_FIELD_EDIT
         fields = context.user_data.setdefault("kn_fields", {})
@@ -2421,10 +2504,12 @@ async def kn_edit_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         labels.update(FIELD_SCHEMAS.get(knowledge_type, {}))
         labels.update(BUTTON_FIELDS.get(knowledge_type, {}))
         kb = _field_edit_keyboard(keys, labels)
-        await update.message.reply_text(
+        await delete_tracked(context)
+        sent = await update.message.reply_text(
             f"✓ `{key}` به‌روز شد.\n\nروی فیلد دیگری بزنید یا برگردید.",
             reply_markup=kb,
         )
+        track_prompt(context, sent)
         return KN_FIELD_EDIT
     except Exception:
         logger.exception("خطا در kn_edit_text_input")
@@ -2474,6 +2559,8 @@ async def _cancel_knowledge_conv(update: Update, context: ContextTypes.DEFAULT_T
     for key in list(context.user_data):
         if key.startswith("kn_") or key.startswith("_KEY_"):
             context.user_data.pop(key, None)
+    await delete_tracked(context)
+    await delete_tracked(context, "_attach_summary")
     telegram_id = update.effective_user.id
     if update.message:
         await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_keyboard(telegram_id))

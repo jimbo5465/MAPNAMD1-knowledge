@@ -31,6 +31,11 @@ from db.models import (
 )
 from handlers.auth import require_registration
 from handlers.keyboards import back_to_main_keyboard, main_menu_keyboard
+from handlers.prompt_cleanup import (
+    track_prompt,
+    delete_tracked,
+    prompt_reply,
+)
 from handlers.jalali_calendar import (
     build_calendar_keyboard,
     parse_pick_data,
@@ -169,6 +174,8 @@ async def obs_new_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             [InlineKeyboardButton("🏠 انصراف", callback_data="menu:main")],
         ]),
     )
+    if query.message:
+        track_prompt(context, query.message)
     return OBS_CONTENT
 
 
@@ -208,15 +215,15 @@ async def _save_observation_text(update: Update, context: ContextTypes.DEFAULT_T
 
     context.user_data["obs_saved_id"] = obs_id
 
-    # مرحلهٔ بعد: عنوان
+    # مرحلهٔ بعد: عنوان — پرامپت قبلی حذف شود
     target = update.effective_message
     if target is None:
         return ConversationHandler.END
-    await target.reply_text(
+    await prompt_reply(
+        target, context,
         f"✅ متن مشاهده ذخیره شد.\n\n"
         f"📝 حالا *عنوان* کوتاهی برای این مشاهده وارد کنید:\n"
         f"مثلاً: «نقص در شیرهای اطمینان واحد ۳»",
-        parse_mode="Markdown",
     )
     return OBS_TITLE
 
@@ -237,12 +244,12 @@ async def obs_title_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
         update_observation(obs_id, title=title)
     context.user_data["obs_title"] = title
 
-    await update.message.reply_text(
+    await prompt_reply(
+        update.message, context,
         "✅ عنوان ثبت شد.\n\n"
         "#️⃣ *هشتگ‌ها* (اختیاری):\n"
         "هشتگ‌ها را با فاصله بفرستید. مثال: `نقص فنی شیرآلات واحد۳`\n"
         "یا رد کنید.",
-        parse_mode="Markdown",
         reply_markup=_skip_keyboard(),
     )
     return OBS_TAGS
@@ -263,11 +270,11 @@ async def obs_tags_received(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["obs_tags"] = tags
 
     now_str = _today_jalali()
-    await update.message.reply_text(
+    await prompt_reply(
+        update.message, context,
         f"✅ هشتگ‌ها ثبت شد: {' '.join('#' + t for t in tags)}\n\n"
         f"📅 *تاریخ مشاهده* (اختیاری):\n"
         f"تاریخ را به فرمت `YYYY/MM/DD` وارد کنید، از تقویم انتخاب کنید، یا رد کنید (پیش‌فرض: {now_str}).",
-        parse_mode="Markdown",
         reply_markup=_date_entry_keyboard(),
     )
     return OBS_DATE
@@ -306,10 +313,10 @@ async def obs_date_received(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     raw = (update.message.text or "").strip()
     valid, err = validate_jalali_date_str(raw)
     if not valid:
-        await update.message.reply_text(
-            f"❌ {err}\nفرمت صحیح: `1402/12/15` — دوباره وارد کنید یا رد کنید.",
-            parse_mode="Markdown",
-            reply_markup=_skip_keyboard(),
+        await prompt_reply(
+            update.message, context,
+            f"❌ {err}\nفرمت صحیح: `1402/12/15` — دوباره وارد کنید یا از تقویم انتخاب کنید.",
+            reply_markup=_date_entry_keyboard(),
         )
         return OBS_DATE
 
@@ -422,7 +429,12 @@ async def _obs_final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if target is None:
         return ConversationHandler.END
 
-    await target.reply_text(
+    # پرامپت قبلی (تاریخ/تقویم) و خلاصهٔ قبلی پیوست‌ها حذف شوند
+    await delete_tracked(context)
+    await delete_tracked(context, "_attach_summary")
+    context.user_data["obs_attach_prompt_cleaned"] = False
+
+    sent = await target.reply_text(
         f"✅ *مشاهده کامل ثبت شد*\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"📝 *عنوان:* {title}\n"
@@ -433,6 +445,7 @@ async def _obs_final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode="Markdown",
         reply_markup=_attachments_confirm_keyboard(obs_id),
     )
+    track_prompt(context, sent)
     return OBS_ATTACHMENTS
 
 
@@ -469,12 +482,14 @@ async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data["obs_voice_text"] = text
 
-    await update.message.reply_text(
+    await delete_tracked(context)
+    sent = await update.message.reply_text(
         f"📝 *متن تشخیص‌داده‌شده از ویس شما:*\n\n_{text}_\n\n"
         "آیا این متن درست است؟ می‌توانید اصلاح کنید.",
         parse_mode="Markdown",
         reply_markup=_voice_confirm_keyboard(None),
     )
+    track_prompt(context, sent)
     return OBS_CONFIRM_VOICE
 
 
@@ -505,11 +520,11 @@ async def obs_edit_voice_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         return OBS_CONFIRM_VOICE
 
     context.user_data["obs_edited_text"] = corrected
-    await update.message.reply_text(
+    await prompt_reply(
+        update.message, context,
         "🔄 این متن اصلاح‌شده:\n\n"
         f"_{corrected[:200]}_\n\n"
         "آیا می‌خواهید این متن جایگزین متن تشخیص‌داده‌شده شود یا به آن اضافه شود؟",
-        parse_mode="Markdown",
         reply_markup=_edit_choice_keyboard(),
     )
     return OBS_EDIT_CHOICE
@@ -541,6 +556,48 @@ async def obs_edit_append(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ══════════════════════════════════════════════════════════════════════════════
 # پیوست‌ها (عکس/PDF/فایل)
 # ══════════════════════════════════════════════════════════════════════════════
+
+# تجمیع پیام تأیید پیوست‌ها — کاربر چند عکس پشت‌سرهم بفرستد فقط یک پیام خلاصه می‌رود
+_ATTACH_FLUSH_DELAY = 2.5
+_attach_pending: dict = {}  # user_id -> {"photo": n, "file": n, "_task": Task}
+
+
+async def _flush_attachments_notice(msg, context, user_id: int) -> None:
+    """پس از مکث کوتاه، یک پیام جمعی برای همهٔ پیوست‌های تازه ذخیره‌شده می‌فرستد."""
+    import asyncio
+
+    try:
+        await asyncio.sleep(_ATTACH_FLUSH_DELAY)
+    except asyncio.CancelledError:
+        return
+    slot = _attach_pending.pop(user_id, None)
+    if not slot:
+        return
+    n_photo = slot.get("photo", 0)
+    n_file = slot.get("file", 0)
+    total = n_photo + n_file
+    if total <= 0:
+        return
+
+    parts = []
+    if n_photo:
+        parts.append(f"🖼️ {n_photo} عکس")
+    if n_file:
+        parts.append(f"📎 {n_file} فایل")
+    summary = " و ".join(parts)
+
+    obs_id = context.user_data.get("obs_attach_obs_id") or context.user_data.get("obs_saved_id")
+    # خلاصهٔ قبلی حذف و خلاصهٔ جدید جایگزین شود
+    await delete_tracked(context, "_attach_summary")
+    try:
+        sent = await msg.reply_text(
+            f"✅ {summary} ({total} مورد) ذخیره شد.\n\n"
+            "می‌توانید پیوست دیگری اضافه کنید یا تمام کنید.",
+            reply_markup=_attachments_confirm_keyboard(obs_id),
+        )
+        track_prompt(context, sent, "_attach_summary")
+    except Exception:
+        logger.exception("خطا در ارسال پیام جمعی پیوست‌ها")
 
 @require_registration
 async def obs_add_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -633,11 +690,22 @@ async def obs_attachment_received(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ خطا در دریافت پیوست. دوباره تلاش کنید.")
         return OBS_ATTACHMENTS
 
-    type_label = "🖼️ عکس" if mime_type and mime_type.startswith("image") else "📎 فایل"
-    await update.message.reply_text(
-        f"✅ {type_label} ذخیره شد.\n\n"
-        "می‌توانید پیوست دیگری اضافه کنید یا تمام کنید.",
-        reply_markup=_attachments_confirm_keyboard(obs_id),
+    # پیام تأیید فوری نمی‌فرستیم — با مکث کوتاه تجمیع می‌شود
+    # اولین پیوست: پیام خلاصهٔ ثبت (با کیبورد پیوست) حذف شود
+    if not context.user_data.get("obs_attach_prompt_cleaned"):
+        await delete_tracked(context)
+        context.user_data["obs_attach_prompt_cleaned"] = True
+
+    kind = "photo" if mime_type and mime_type.startswith("image") else "file"
+    uid = update.effective_user.id if update.effective_user else 0
+    slot = _attach_pending.setdefault(uid, {})
+    slot[kind] = slot.get(kind, 0) + 1
+    old_task = slot.get("_task")
+    if old_task:
+        old_task.cancel()
+    import asyncio
+    slot["_task"] = asyncio.create_task(
+        _flush_attachments_notice(update.message, context, uid)
     )
     return OBS_ATTACHMENTS
 
