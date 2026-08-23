@@ -388,6 +388,29 @@ class Context:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# مدیریت پرامپت‌ها — پیام قبلی ربات قبل از نمایش پیام جدید حذف شود
+# ══════════════════════════════════════════════════════════════════════════════
+
+def track_prompt(context: Context, msg, key: str = "_bot_prompt") -> None:
+    """شناسهٔ آخرین پیام پرامپت ربات را برای حذف بعدی ذخیره میکند."""
+    try:
+        context.user_data[key] = {"chat": msg.chat_id, "id": msg.message_id}
+    except Exception:
+        pass
+
+
+async def delete_tracked(context: Context, key: str = "_bot_prompt") -> None:
+    """پیام پرامپت ذخیره‌شده را پاک میکند (اگر باشد؛ خطا نادیده گرفته میشود)."""
+    info = context.user_data.pop(key, None)
+    if not info:
+        return
+    try:
+        await context.bot.delete_message(info["chat"], info["id"])
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # هندلرها — امضای PTB
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -600,5 +623,6 @@ __all__ = (
     "filters", "MessageFilter",
     "MessageHandler", "CommandHandler", "CallbackQueryHandler", "TypeHandler",
     "ConversationHandler", "Context", "Dispatcher",
+    "track_prompt", "delete_tracked",
     "_Msg", "_Cbq", "_Update",
 )

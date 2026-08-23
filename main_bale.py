@@ -147,15 +147,19 @@ async def menu_main_handler(update, context) -> None:
     """بازگشت به منوی اصلی."""
     from bale_app.auth import is_registered
     from bale_app.keyboards import main_menu_keyboard
+    from bale_app.framework import delete_tracked
 
     user = update.effective_user
     if not user or not is_registered(user.id):
+        # فرم/پرامپت رهاشده حذف شود
+        await delete_tracked(context)
         from bale_app.registration import start_registration
         await start_registration(update, context)
         return
 
     query = update.callback_query
     if query:
+        await delete_tracked(context)
         await query.edit_message_text(
             "🏠 *منوی اصلی* — ربات دانش سازمانی مپنا توسعه یک\n\n"
             "از گزینه‌های زیر انتخاب کنید:",
