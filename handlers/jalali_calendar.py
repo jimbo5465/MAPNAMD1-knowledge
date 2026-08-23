@@ -1,10 +1,10 @@
 """
-تقویم جلالی inline برای نسخه بله — انتخاب تاریخ با دکمه‌های شیشه‌ای.
+تقویم جلالی inline برای نسخه تلگرام — انتخاب تاریخ با دکمه‌های شیشه‌ای.
 
 منطق مشترک در utils/jalali_calendar_core.py است؛ این ماژول فقط تاپل‌های
-(text, callback_data) را به InlineKeyboardMarkup لایهٔ framework تبدیل میکند.
+(text, callback_data) را به telegram.InlineKeyboardMarkup تبدیل میکند.
 
-هر flow با یک prefix اختصاصی از این ماژول استفاده میکند:
+هر flow با یک prefix اختصاصی استفاده میکند:
   - observations → prefix="obsdate"
   - knowledge    → prefix="kndate"
 
@@ -13,13 +13,12 @@ callback_data ها:
   {prefix}:view:{y}:{m}      ← ناوبری ماه/سال
   {prefix}:pick:{y}:{m}:{d}  ← انتخاب روز
   {prefix}:none              ← سلول غیرفعال (عنوان ماه، خانه‌های خالی)
-
-هفته شنبه‌محور است (weekday() در jdatetime: ۰=شنبه … ۶=جمعه).
 """
 
 from __future__ import annotations
 
-from bale_app.framework import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 from utils.jalali_calendar_core import (
     MIN_YEAR,
     MAX_YEAR,
