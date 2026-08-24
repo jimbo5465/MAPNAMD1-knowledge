@@ -117,6 +117,35 @@ ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgeb
 
 ---
 
+## ۸. بکاپ و بازیابی
+
+- **بکاپ خودکار:** هر روز ساعت ۳:۳۰ بامداد با cron روی سرور اجرا می‌شود
+  (`scripts/backup_db.py`) → `/root/backups/knowledgebot/knowledge-YYYY-MM-DD.db.gz`
+- از SQLite Online Backup API استفاده می‌کند (امن در حین فعالیت ربات‌ها) + بررسی integrity
+- نگهداری: آخرین **۷ نسخهٔ روزانه**؛ قدیمی‌ترها خودکار حذف می‌شوند
+
+### بازیابی دستی
+
+```bash
+# ۱. توقف سرویس‌ها
+sudo systemctl stop knowledgebot-bale knowledgebot
+
+# ۲. بازگردانی (مسیر بکاپ موردنظر)
+gunzip -c /root/backups/knowledgebot/knowledge-YYYY-MM-DD.db.gz \
+    > /root/MAPNAMD1-knowledge/data/knowledge.db
+
+# ۳. اجرای مجدد
+sudo systemctl start knowledgebot-bale knowledgebot
+```
+
+### اجرای دستی بکاپ
+
+```bash
+cd /root/MAPNAMD1-knowledge && .venv/bin/python scripts/backup_db.py
+```
+
+---
+
 ## ۷. ساختار فایل‌ها
 
 ```

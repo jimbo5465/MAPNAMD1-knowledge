@@ -54,6 +54,13 @@ ssh vps "journalctl -u knowledgebot-bale -f --no-pager"
 - `answerCallbackQuery` در API بله وجود ندارد — لایه `bale_app/framework.py` شبیه‌سازی کرده.
 - مارک‌داون پشتیبانی نمی‌شود — `strip_markdown` در framework متن را تمیز می‌کند.
 
+## 💾 بکاپ (فعال از 1404/06)
+
+- cron روزانه 3:30 سرور: `scripts/backup_db.py` → `/root/backups/knowledgebot/knowledge-YYYY-MM-DD.db.gz`
+- نگهداری ۷ نسخه؛ SQLite online backup + integrity_check
+- بازیابی: `gunzip -c <file> > data/knowledge.db` (سرویس‌ها متوقف)
+- **TODO آینده:** ارسال بکاپ خارج از سرور (چت ادمین بله/تلگرام یا storage)، بکاپ پوشهٔ `media/`
+
 ## 🐛 تجربه‌های دیباگ قبلی
 
 - «این دکمه دیگر معتبر نیست» = callback ناشناخته → حالا در `main_bale.py` لاگ می‌شود (unknown_callback_handler).
