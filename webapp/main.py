@@ -29,6 +29,7 @@ from db.models import (  # noqa: E402
     get_observation_attachment,
     get_observation_by_id,
     get_user_by_db_id,
+    get_user_by_platform_id,
     list_knowledge_by_user,
     list_observation_attachments,
     list_observations_by_user,
