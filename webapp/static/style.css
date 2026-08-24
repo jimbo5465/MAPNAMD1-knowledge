@@ -21,6 +21,9 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* جلوگیری قطعی از سرریز افقی (مشکل کشیده‌شدن صفحه در RTL) */
+html, body { overflow-x: hidden; max-width: 100%; }
+
 body {
     font-family: Tahoma, "Segoe UI", sans-serif;
     background: var(--bg);
@@ -81,7 +84,7 @@ header {
 .search-bar input:focus { border-color: var(--accent); }
 
 /* ── کارت‌ها ── */
-.cards { display: flex; flex-direction: column; gap: 10px; }
+.cards { display: flex; flex-direction: column; gap: 10px; max-width: 100%; }
 
 .card {
     background: var(--card);
@@ -90,9 +93,16 @@ header {
     padding: 13px 15px;
     cursor: pointer;
     transition: transform .08s;
+    overflow: hidden;
 }
 .card:active { transform: scale(.98); }
-.card h3 { font-size: 14.5px; margin-bottom: 7px; line-height: 1.8; }
+.card h3 {
+    font-size: 14.5px;
+    margin-bottom: 7px;
+    line-height: 1.8;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
 .card .meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
     font-size: 11.5px;
@@ -101,6 +111,10 @@ header {
     color: var(--muted);
     padding: 3px 9px;
     border-radius: 20px;
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .chip.ok   { color: #16a34a; border-color: #16a34a55; }
 .chip.draft{ color: #d97706; border-color: #d9770655; }
@@ -130,6 +144,8 @@ header {
     font-size: 14px;
     white-space: pre-wrap;
     word-break: break-word;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
 }
 .detail-card .row { display: flex; gap: 8px; margin-bottom: 6px; font-size: 13px; }
 .detail-card .row b { color: var(--muted); min-width: 78px; }
@@ -141,6 +157,8 @@ header {
     background: var(--bg); border: 1px solid var(--border);
     border-radius: 22px; padding: 7px 14px; font-size: 12.5px;
     color: var(--accent); cursor: pointer; text-decoration: none;
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .att-img { max-width: 100%; border-radius: 12px; margin-top: 10px; display: block; }
 
@@ -149,6 +167,7 @@ header {
 .profile-rows .prow {
     display: flex; justify-content: space-between; gap: 10px;
     padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px;
+    overflow-wrap: anywhere;
 }
 .profile-rows .prow:last-child { border-bottom: none; }
 .profile-rows .prow span:first-child { color: var(--muted); }
