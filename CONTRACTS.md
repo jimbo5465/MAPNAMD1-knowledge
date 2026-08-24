@@ -165,6 +165,7 @@ OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 | `archive:open` | زیرمنو: بایگانی مشاهدات / بایگانی دانش | standalone |
 | `archive:obs` | زیرمنوی مشاهدات → دکمه‌های `obs:list` و `obs:search` | standalone |
 | `archive:kn` | زیرمنوی دانش → دکمه‌های `kn:list` و `kn:search` | standalone |
+| `obs:listpage:N` | صفحهٔ N لیست مشاهدات (۵ آیتم در صفحه؛ منبع: همه یا نتایج جستجو) | entry_point مشاهده |
 | `kn:list` | لیست صفحه‌بندی‌شدهٔ دانش‌های خود کاربر | entry_point دانش |
 | `kn:search` | دریافت عبارت جستجوی دانش | entry_point دانش |
 | `kn:view:<id>` | جزئیات یک دانش (**فقط مالک**؛ لینک «مشاهده دانش» مشاهدات ارتقایی را هم فعال می‌کند) | entry_point دانش |
