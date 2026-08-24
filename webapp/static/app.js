@@ -1,8 +1,23 @@
 /* ربات دانش سازمانی — منطق مینی‌اپ (بدون وابستگی خارجی، سازگار با وب‌ویوهای قدیمی) */
 
 var API = "/api";
+var APP_VERSION = "v6-debug";
 var TOKEN = sessionStorage.getItem("kb_token") || null;
 var ME = null;
+
+function dbg(msg) {
+    try {
+        var x = new XMLHttpRequest();
+        x.open("GET", "/api/dbg?m=" + encodeURIComponent(APP_VERSION + " | " + msg));
+        x.send();
+    } catch (e) {}
+}
+
+window.onerror = function (m, s, l) {
+    dbg("JS-ERROR: " + m + " @line " + l);
+    var d = $("dbg");
+    if (d) { d.style.display = "block"; d.textContent = "JS error: " + m + " @line " + l; }
+};
 
 // ── ابزار ─────────────────────────────────────────────────────────────────────
 
@@ -157,10 +172,21 @@ document.querySelectorAll(".tabbar button").forEach(function (btn) {
         document.querySelectorAll(".tabbar button").forEach(function (b) { b.classList.remove("active"); });
         btn.classList.add("active");
         currentTab = btn.getAttribute("data-tab");
+        dbg("tab-click: " + currentTab);
         state.search = {};
         if (currentTab === "kn") { showView("kn-list"); loadKn(0); }
         else if (currentTab === "obs") { showView("obs-list"); loadObs(0); }
-        else { showView("me-view", titles.me); renderMe(); }
+        else {
+            try {
+                showView("me-view", titles.me);
+                setStatusVisible(true);
+                renderMe();
+            } catch (e) {
+                dbg("me-tab-ERR: " + e.message);
+                setStatusVisible(false);
+                $("me-view").innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>';
+            }
+        }
     });
 });
 
@@ -335,8 +361,10 @@ $("obs-next").addEventListener("click", function () { loadObs(state.obsPage + 1)
 // ── پروفایل ───────────────────────────────────────────────────────────────────
 
 async function renderMe() {
+    dbg("renderMe:start");
     try {
         var m = await api("/me");
+        dbg("renderMe:got-data");
         function row(k, v) {
             return '<div class="prow"><span>' + k + '</span><span>' + esc(v || "—") + '</span></div>';
         }
@@ -349,16 +377,28 @@ async function renderMe() {
             row("💼 سمت", m.position) +
             '</div>' +
             '<p class="empty" style="padding-top:20px">ویرایش اطلاعات از طریق ربات انجام می‌شود.</p>';
+        setStatusVisible(false);
+        dbg("renderMe:done");
     } catch (e) {
+        dbg("renderMe:ERR " + e.message);
+        setStatusVisible(false);
         $("me-view").innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>';
         toast(e.message);
     }
+}
+
+function setStatusVisible(on) {
+    var s = $("loading-screen");
+    if (!s) return;
+    if (on) { s.classList.remove("hidden"); setStatus("در حال دریافت پروفایل..."); }
+    else s.classList.add("hidden");
 }
 
 // ── شروع ──────────────────────────────────────────────────────────────────────
 
 (async function boot() {
     try {
+        dbg("boot:start");
         if (!TOKEN) {
             await auth();
         } else {
@@ -368,6 +408,7 @@ async function renderMe() {
         }
         $("loading-screen").classList.add("hidden");
         $("app").classList.remove("hidden");
+        dbg("boot:ok");
         loadKn(0);
     } catch (e) {
         $("loading-screen").classList.add("hidden");

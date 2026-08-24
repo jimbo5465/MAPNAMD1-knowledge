@@ -297,6 +297,13 @@ def obs_attachment_file(att_id: int, user: dict = Depends(current_db_user)):
     return FileResponse(path, filename=os.path.basename(path))
 
 
+@app.get("/api/dbg")
+def dbg(m: str = Query("", max_length=300)):
+    """تله‌متری سادهٔ دیباگ فرانت‌اند — موقت."""
+    logger.info("[WEBAPP-DBG] %s", m)
+    return {"ok": True}
+
+
 @app.exception_handler(Exception)
 async def unhandled(request, exc):  # noqa: ANN001
     logger.exception("خطای وب‌اپ")
