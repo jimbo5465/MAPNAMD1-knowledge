@@ -58,3 +58,9 @@ ssh vps "journalctl -u knowledgebot-bale -f --no-pager"
 
 - «این دکمه دیگر معتبر نیست» = callback ناشناخته → حالا در `main_bale.py` لاگ می‌شود (unknown_callback_handler).
 - Dispatcher سفارشی در `bale_app/framework.py` — state گفتگوها در حافظه است؛ ری‌استارت سرویس همه stateها را پاک می‌کند.
+
+## 🔗 هویت دوپلتفرمی (لینک بله/تلگرام)
+
+- یک کاربر واحد در هر دو پلتفرم: تطبیق `phone_norm` (۱۰ رقم آخر شماره) + کد پرسنلی — از `register_or_link_user` در `db/models.py`.
+- توابع models که پارامتر `telegram_id` دارند، شناسهٔ هر دو پلتفرم را می‌پذیرند و داخلی resolve می‌کنند — هرگز مستقیم روی `observations.telegram_id` با شناسهٔ خام کوئری نزن.
+- تست‌ها: `test_link_accounts.py` و `test_migration.py` (با دیتابیس موقت، بی‌خطر برای data/knowledge.db).

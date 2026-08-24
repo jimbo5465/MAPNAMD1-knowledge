@@ -21,7 +21,41 @@
 
 ## قراردادهای دیتابیس
 
-### `db/models.py` — تنها لایه‌ی دسترسی
+### قاعدهٔ هویت دوپلتفرمی (مهم!)
+
+توابع `db/models.py` که پارامتر `telegram_id` دارند، از این پس **شناسهٔ هر پلتفرم**
+(تلگرام یا بله) را می‌پذیرند و داخلی با `get_user_by_platform_id` به رکورد کاربر
+resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search_observations`,
+`find_pending_knowledge_by_user`, `add_knowledge_entry`, `update_user`.
+
+هرگز مستقیم با شناسهٔ خام پلتفرم روی جدول `observations.telegram_id` کوئری نزنید —
+همیشه از توابع models استفاده کنید تا داده‌های لینک‌شده گم نشوند.
+
+### `db/phone_utils.py`
+
+| تابع | امضا | توضیح |
+|---|---|---|
+| `normalize_phone` | `(phone) -> str \| None` | کلید مشترک ۱۰ رقمی؛ همهٔ فرمت‌های `+98915...` / `98915...` / `0915...` / ارقام فارسی → `915...` ؛ نامعتبر → None |
+| `only_digits` | `(raw) -> str` | تبدیل ارقام فارسی/عربی به لاتین و حذف بقیهٔ کاراکترها |
+
+### `db/models.py` — لینک حساب‌های بله و تلگرام
+
+| تابع | امضا | توضیح |
+|---|---|---|
+| `get_user_by_platform_id` | `(platform_id) -> dict \| None` | جستجو در **هر دو** ستون `telegram_id` و `bale_id` |
+| `find_linkable_user` | `(phone, personnel_code) -> dict \| None` | تطبیق همزمان `phone_norm` + کد پرسنلی (لایهٔ امنیتی) |
+| `link_platform_account` | `(db_user_id, platform_id, platform) -> None` | اتصال شناسهٔ `bale`/`telegram` به رکورد موجود |
+| `deactivate_duplicate_accounts` | `(platform_id, keep_db_id, future_owner_key=None) -> int` | ادغام رکوردهای تکراری قدیمی — دانش/مشاهدات منتقل، رکورد غیرفعال |
+| `register_or_link_user` | `(*, platform, platform_id, full_name, phone=None, personnel_code=None, project_name=None, position=None) -> tuple[int, bool]` | در پایان ثبت‌نام: ثبت جدید یا لینک به حساب موجود. خروجی: `(user_db_id, linked?)` |
+
+قواعد لینک:
+- لینک **فقط** با تطبیق شمارهٔ نرمال‌شده + کد پرسنلی انجام می‌شود (هر دو اجباری).
+- ثبت اولیه در بله: `telegram_id` = شناسهٔ بله (کلید مالکیت) و `bale_id` = شناسهٔ بله.
+- رکورد تکراریِ ادغام‌شده: `is_active=0` ، `bale_id=NULL` ، `telegram_id=-<id>` (sentinel منفی).
+- انتقال داده هنگام ادغام: `knowledge_entries.reported_by` و `observations.telegram_id`
+  به کلید مالکیت نهایی (`future_owner_key`) منتقل می‌شوند.
+
+### `db/models.py` — مشاهدات
 
 | تابع | امضا |
 |---|---|
@@ -35,12 +69,23 @@
 | `add_observation_attachment` | `(observation_id, file_path, file_name=None, mime_type=None, file_size=None) -> int` |
 | `list_observation_attachments` | `(observation_id) -> list[dict]` |
 
+### ساختار جدول `users`
+
+| ستون | نوع | توضیح |
+|---|---|---|
+| `id` | INTEGER PK | شناسهٔ داخلی (ارجاع `knowledge_entries.reported_by`) |
+| `telegram_id` | INTEGER NOT NULL UNIQUE | شناسه تلگرام؛ اگر کاربر اول‌بار در بله ثبت شود، شناسهٔ بله همینجا می‌نشیند (کلید مالکیت مشاهدات) |
+| `bale_id` | INTEGER UNIQUE nullable | شناسهٔ بله در صورت لینک شدن حساب |
+| `phone_norm` | TEXT indexed | شمارهٔ نرمال‌شدهٔ ۱۰ رقمی — کلید تطبیق بین پلتفرم‌ها |
+| `full_name` / `phone` / `personnel_code` / `project_name` / `position` | TEXT | پروفایل |
+| `is_active` | 0/1 | رکوردهای ادغام‌شده = 0 |
+
 ### ساختار جدول `observations`
 
 | ستون | نوع | توضیح |
 |---|---|---|
 | `id` | INTEGER PK | شناسه |
-| `telegram_id` | INTEGER | شناسه تلگرام کاربر |
+| `telegram_id` | INTEGER | **کلید مالکیت** = مقدار ستون `telegram_id` رکورد کاربر (نه لزوماً شناسهٔ تلگرام) |
 | `title` | TEXT | عنوان مشاهده |
 | `content` | TEXT | متن مشاهده |
 | `status` | TEXT | `raw` / `maturing` / `promoted` / `archived` |
@@ -162,7 +207,8 @@ OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 
 | متغیر | توضیح |
 |---|---|
-| `BOT_TOKEN` | توکن ربات از BotFather (اجباری) |
+| `BOT_TOKEN` | توکن ربات تلگرام از BotFather (اجباری برای نسخهٔ تلگرام) |
+| `BALE_BOT_TOKEN` | توکن ربات بله (اجباری برای نسخهٔ بله) |
 | `KNOWLEDGE_AI_API_KEY` | کلید OpenCode Go (یا `OPENCODE_GO_API_KEY`) |
 | `KNOWLEDGE_AI_BASE_URL` | پیش‌فرض `https://opencode.ai/zen/go/v1` |
 | `KNOWLEDGE_AI_MODEL` | پیش‌فرض `deepseek-v4-flash` |
@@ -177,3 +223,5 @@ OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 |---|---|
 | 1403/05 | نسخه‌ی اولیه — فورک از WelderBot با پاکسازی |
 | 1403/05 | افزودن ثبت‌نام اجباری، مشاهده، جستجو، قفل AI |
+| 1404/06 | پورت کامل روی بله (`bale_app/` + `main_bale.py`) — دو پلتفرم، یک دیتابیس |
+| 1404/06 | **لینک حساب‌های بله/تلگرام**: نرمال‌سازی شماره (`phone_utils`)، ستون‌های `bale_id`/`phone_norm`، لینک خودکار با شماره+کد پرسنلی، ادغام رکوردهای تکراری قدیمی |

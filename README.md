@@ -1,11 +1,12 @@
 # ربات دانش سازمانی MAPNAMD1-knowledge
 
-ربات تلگرام برای **ثبت، مدیریت و جستجوی دانش سازمانی و مشاهدات میدانی** — ویژه‌ی واحد MAPNAMD1.
+ربات **تلگرام و بله** برای **ثبت، مدیریت و جستجوی دانش سازمانی و مشاهدات میدانی** — ویژه‌ی واحد MAPNAMD1.
 
 این ربات به کاربران اجازه می‌دهد:
 - **مشاهده** ثبت کنند (متن، ویس، عکس، فایل) با عنوان، هشتگ و تاریخ
 - **دانش/تجربه سازمانی** را ثبت و ساختارمند کنند (دستی یا مصاحبه با هوش مصنوعی)
 - در مشاهدات **جستجو** کنند (بر اساس متن، هشتگ، تاریخ)
+- با **یک حساب واحد** هم از تلگرام و هم از بله استفاده کنند — داده‌ها کاملاً مشترک‌اند
 
 ---
 
@@ -18,6 +19,27 @@
 | 📝 ثبت دانش | ثبت دانش/تجربه‌ی سازمانی — دستی یا مصاحبه‌ی هوشمند با AI |
 | 🗂️ مشاهده‌های من | مرور، افزودن مطلب، ارتقا به دانش، بایگانی |
 | 👤 پروفایل من | مشاهده و ویرایش اطلاعات ثبت‌نام |
+| 🔗 حساب دوپلتفرمی | لینک خودکار حساب بله و تلگرام — دانش و مشاهدات مشترک بین هر دو |
+
+---
+
+## حساب دوپلتفرمی (بله + تلگرام)
+
+هر دو نسخهٔ ربات به **یک دیتابیس** وصل‌اند. کاربر می‌تواند از هر پلتفرمی که دلش خواست استفاده کند:
+
+```
+کاربر در تلگرام ثبت‌نام می‌کند  →  همان شخص در بله /start می‌زند
+                                      ↓
+              تطبیق: شماره موبایل + کد پرسنلی
+                                      ↓
+        «🔗 حساب بله شما به حساب تلگرامی‌تان متصل شد»
+                                      ↓
+   مشاهده‌ها، پیش‌نویس دانش و پروفایل — همه در هر دو پلتفرم یکسان
+```
+
+- شماره با هر فرمتی پذیرفته می‌شود: `+989155107315` ، `989155107315` ، `09155107315` — همه یکی در نظر گرفته می‌شوند (۱۰ رقم انتهایی ملاک است).
+- 🔒 **امنیت:** لینک فقط وقتی انجام می‌شود که **کد پرسنلی** هم با شماره مطابقت داشته باشد؛ یعنی با داشتن صرفِ شمارهٔ کسی نمی‌توان به داده‌هایش دسترسی پیدا کرد.
+- اگر شخص قبلاً در هر دو پلتفرم جداگانه ثبت‌نام کرده باشد، در اولین ثبت‌نام مجدد رکوردها **ادغام** می‌شوند.
 
 ---
 
@@ -79,12 +101,13 @@
 
 ```
 MAPNAMD1-knowledge/
-├── main.py                    # نقطه‌ی ورود — ثبت handler ها و اجرا
+├── main.py                    # نقطه‌ی ورود ربات تلگرام
+├── main_bale.py               # نقطه‌ی ورود ربات بله
 ├── config.py                  # تنظیمات و متغیرهای محیطی
-├── requirements.txt           # وابستگی‌ها
-├── db/
+├── db/                        # دیتابیس مشترک دو پلتفرم
 │   ├── init.py                # ساخت جداول و migration
-│   └── models.py              # مدل‌ها و CRUD (کاربر، دانش، مشاهده، پیوست)
+│   ├── models.py              # CRUD + لینک حساب‌ها (register_or_link_user)
+│   └── phone_utils.py         # نرمال‌سازی شماره موبایل
 ├── engine/
 │   ├── knowledge_ai.py        # استخراج فیلدها با AI
 │   ├── knowledge_interview.py # مصاحبه‌ی هوشمند + ساخت فرم نهایی
@@ -92,17 +115,22 @@ MAPNAMD1-knowledge/
 │   ├── knowledge_render.py    # خروجی PDF/Word
 │   ├── knowledge_tree.py      # درخت دانش سازمانی
 │   └── knowledge_numbering.py # شماره‌گذاری دانش
-├── handlers/
-│   ├── registration.py        # ثبت‌نام و پروفایل
+├── handlers/                  # لایهٔ رابط تلگرام
+│   ├── registration.py        # ثبت‌نام و پروفایل (+ لینک حساب بله)
 │   ├── observations.py        # مشاهدات میدانی + جستجو
 │   ├── knowledge.py           # ثبت دانش
 │   ├── keyboards.py           # کیبوردها
 │   └── auth.py                # احراز هویت
+├── bale_app/                  # لایهٔ رابط بله (فریم‌ورک سبک سفارشی)
+│   ├── framework.py           # Update/Context/Dispatcher شبیه‌ساز تلگرام روی بله
+│   └── ...                    # همان ساختار handlers/
 ├── utils/
 │   ├── busy_lock.py           # قفل «در حال پردازش» AI
 │   ├── dates.py               # تبدیل تاریخ جلالی/میلادی
 │   └── validators.py          # اعتبارسنجی
-├── data/                      # [runtime] دیتابیس SQLite
+├── test_link_accounts.py      # تست لینک حساب‌های دوپلتفرمی
+├── test_migration.py          # تست migration دیتابیس
+├── data/                      # [runtime] دیتابیس SQLite — مشترک دو ربات
 ├── media/                     # [runtime] عکس‌ها و فایل‌ها
 └── logs/                      # [runtime] لاگ‌ها
 ```
@@ -112,8 +140,8 @@ MAPNAMD1-knowledge/
 ## تکنولوژی
 
 - **Python 3.11**
-- **python-telegram-bot 20.7**
-- **SQLite** (فایل `data/knowledge.db`)
+- **python-telegram-bot 20.7** (نسخهٔ تلگرام) + **فریم‌ورک سبک داخلی** برای بله
+- **SQLite** (فایل `data/knowledge.db` — مشترک بین دو پلتفرم)
 - **Groq API** — تبدیل صوت به متن (whisper-large-v3-turbo)
 - **OpenCode Go / deepseek-v4-flash** — هوش مصنوعی استخراج فیلد و مصاحبه
 - **jdatetime** — تاریخ جلالی
@@ -134,13 +162,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # ۳. متغیرهای محیطی
-export BOT_TOKEN="توکن ربات از BotFather"
+export BOT_TOKEN="توکن ربات تلگرام از BotFather"
+export BALE_BOT_TOKEN="توکن ربات بله"
 export KNOWLEDGE_AI_API_KEY="کلید OpenCode Go"
 export KNOWLEDGE_AI_MODEL="deepseek-v4-flash"
 export GROQ_API_KEY="کلید Groq"
 
-# ۴. اجرا
-python main.py
+# ۴. اجرا (هر پلتفرم جداگانه)
+python main.py         # نسخهٔ تلگرام
+python main_bale.py    # نسخهٔ بله
 ```
 
 ---
@@ -148,12 +178,11 @@ python main.py
 ## استقرار با systemd (VPS)
 
 ```bash
-sudo cp MAPNAMD1-knowledge.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable knowledgebot
-sudo systemctl start knowledgebot
-sudo systemctl status knowledgebot        # بررسی وضعیت
-sudo journalctl -u knowledgebot -f        # لاگ زنده
+sudo systemctl enable --now knowledgebot          # نسخهٔ تلگرام (main.py)
+sudo systemctl enable --now knowledgebot-bale     # نسخهٔ بله (main_bale.py)
+
+sudo systemctl status knowledgebot knowledgebot-bale   # بررسی وضعیت
+sudo journalctl -u knowledgebot-bale -f                # لاگ زنده
 ```
 
 ---
