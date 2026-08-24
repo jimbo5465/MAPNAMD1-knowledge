@@ -146,6 +146,21 @@ cd /root/MAPNAMD1-knowledge && .venv/bin/python scripts/backup_db.py
 
 ---
 
+## ۹. وب‌اپ (مینی‌اپ)
+
+- آدرس: `https://web.mohsekarim8.ir` (Cloudflare پروکسی + Origin Certificate تا ۲۰۴۱)
+- زنجیره: CF edge:443 → Origin Rule (پورت ۲۰۸۳) → nginx → استاتیک `/var/www/knowledge-miniapp/` + پراکسی `/api/` → uvicorn 127.0.0.1:8010
+- سرویس: `knowledgebot-webapp` — env از `/etc/knowledgebot/bale.env` و `webapp.env` (شامل `WEBAPP_SECRET` و `BOT_TOKEN`)
+- ورود: فقط با initData معتبر از داخل بله/تلگرام؛ کاربر باید قبلاً در ربات ثبت‌نام کرده باشد
+
+### به‌روزرسانی فرانت‌اند
+
+```bash
+cd /root/MAPNAMD1-knowledge && git pull && rsync -a --delete webapp/static/ /var/www/knowledge-miniapp/
+```
+
+---
+
 ## ۷. ساختار فایل‌ها
 
 ```

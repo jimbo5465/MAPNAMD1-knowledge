@@ -231,6 +231,26 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 | `gregorian_to_jalali_display` | `(gregorian_str) -> str` (خروجی `۱۵ اسفند ۱۴۰۲`) |
 | `validate_jalali_date_str` | `(value) -> (bool, str \| None)` |
 
+## قراردادهای وب‌اپ (webapp/)
+
+| Endpoint | متد | توضیح |
+|---|---|---|
+| `/api/auth` | POST | `{init_data, platform}` → توکن نشست + پروفایل؛ 403 اگر ثبت‌نام نکرده |
+| `/api/me` | GET | پروفایل کاربر نشست |
+| `/api/kn` / `/api/kn/search?q=` | GET | لیست صفحه‌بندی‌شده / جستجوی دانش‌های خود کاربر |
+| `/api/kn/{id}` | GET | جزئیات دانش (فقط مالک) |
+| `/api/obs` / `/api/obs/search?q=` | GET | لیست / جستجوی مشاهدات |
+| `/api/obs/{id}` | GET | جزئیات مشاهده + متادیتای پیوست‌ها |
+| `/api/file/obs-att/{id}` | GET | دانلود پیوست (فقط مالک مشاهده) |
+
+قواعد:
+- همه به‌جز auth نیاز به `Authorization: Bearer <token>` دارند.
+- توکن نشست: payload JSON base64url + امضای HMAC با `WEBAPP_SECRET` — TTL ۷ روز.
+- اعتبارسنجی initData: HMAC-SHA256 با secret مشتق‌شده از توکن همان پلتفرم
+  (هر دو ترتیب مستندشده پذیرفته می‌شود) + چک تازگی `auth_date` (حداکثر ۲ روز).
+- فرانت‌اند هیچ SDK خارجی‌ای را sync لود نمی‌کند؛ SDK بله به‌صورت غیرمسدودکننده
+  و با timeout لود می‌شود و در تلگرام initData از URL خوانده می‌شود.
+
 ---
 
 ## قراردادهای environment
@@ -244,6 +264,7 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 | `KNOWLEDGE_AI_MODEL` | پیش‌فرض `deepseek-v4-flash` |
 | `GROQ_API_KEY` | کلید Groq برای STT |
 | `GROQ_STT_MODEL` | پیش‌فرض `whisper-large-v3-turbo` |
+| `WEBAPP_SECRET` | کلید امضای توکن نشست وب‌اپ (فایل `/etc/knowledgebot/webapp.env` روی سرور) |
 
 ---
 
@@ -256,3 +277,4 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 | 1404/06 | پورت کامل روی بله (`bale_app/` + `main_bale.py`) — دو پلتفرم، یک دیتابیس |
 | 1404/06 | **لینک حساب‌های بله/تلگرام**: نرمال‌سازی شماره (`phone_utils`)، ستون‌های `bale_id`/`phone_norm`، لینک خودکار با شماره+کد پرسنلی، ادغام رکوردهای تکراری قدیمی |
 | 1404/06 | **بایگانی و جستجو**: ترکیب دکمه‌های منو، لیست صفحه‌بندی‌شدهٔ دانش‌ها، جستجوی متنی در دانش‌ها (`kn:list` / `kn:search` / `kn:view`) |
+| 1404/06 | **مینی‌اپ وب**: `webapp/` (FastAPI + SPA)، دامنهٔ `web.mohsekarim8.ir` با CF Origin Cert، دکمهٔ `web_app` در منوی بله، پشتیبانی تلگرام |

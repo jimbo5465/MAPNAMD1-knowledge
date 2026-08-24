@@ -113,7 +113,31 @@ users
 - **لایهٔ امنیتی:** لینک فقط با تطبیق همزمان شماره + کد پرسنلی انجام می‌شود —
   دانستن شمارهٔ شخص به‌تنهایی دسترسی به داده‌هایش نمی‌دهد.
 
-### ۵. utils/ — ابزارهای عمومی
+### ۵. webapp/ — لایهٔ وب (مینی‌اپ بله/تلگرام)
+
+بک‌اند FastAPI + فرانت‌اند vanilla JS که از طریق nginx روی `https://web.mohsekarim8.ir` سرو می‌شود.
+
+```
+کلاینت وب‌ویو بله/تلگرام
+        │ initData (امضاشده با توکن همان پلتفرم)
+        ▼
+POST /api/auth → اعتبارسنجی HMAC-SHA256 → توکن نشست (7 روز)
+        │ Bearer token
+        ▼
+GET /api/kn | /api/obs | /api/me | /api/file/*  ← db/models.py مشترک
+```
+
+| فایل | وظیفه |
+|---|---|
+| `webapp/auth.py` | validate_init_data (هر دو پلتفرم) + issue/resolve توکن نشست |
+| `webapp/main.py` | endpointها + چک مالکیت در هر کوئری |
+| `webapp/static/` | SPA بدون وابستگی خارجی — initData را از SDK پلتفرم یا URL می‌خواند |
+
+- اجرا: سرویس `knowledgebot-webapp` (uvicorn روی 127.0.0.1:8010)
+- nginx: استاتیک + پراکسی `/api/` — HTTPS با Origin Certificate کلودفلر
+- هویت: همان سیستم دوپلتفرمی (`get_user_by_platform_id`) — داده‌ها بین ربات و وب یکسان
+
+### ۶. utils/ — ابزارهای عمومی
 
 | فایل | وظیفه |
 |---|---|

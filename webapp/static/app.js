@@ -1,23 +1,8 @@
 /* ربات دانش سازمانی — منطق مینی‌اپ (بدون وابستگی خارجی، سازگار با وب‌ویوهای قدیمی) */
 
 var API = "/api";
-var APP_VERSION = "v6-debug";
 var TOKEN = sessionStorage.getItem("kb_token") || null;
 var ME = null;
-
-function dbg(msg) {
-    try {
-        var x = new XMLHttpRequest();
-        x.open("GET", "/api/dbg?m=" + encodeURIComponent(APP_VERSION + " | " + msg));
-        x.send();
-    } catch (e) {}
-}
-
-window.onerror = function (m, s, l) {
-    dbg("JS-ERROR: " + m + " @line " + l);
-    var d = $("dbg");
-    if (d) { d.style.display = "block"; d.textContent = "JS error: " + m + " @line " + l; }
-};
 
 // ── ابزار ─────────────────────────────────────────────────────────────────────
 
@@ -157,7 +142,6 @@ var titles = { kn: "📚 دانش‌های من", obs: "📓 مشاهدات من
 function ensureViewEl(name) {
     var el = $(name + "-view");
     if (el) return el;
-    dbg("ensureView:create #" + name + "-view");
     el = document.createElement("main");
     el.id = name + "-view";
     el.className = "view hidden";
@@ -169,14 +153,13 @@ function ensureViewEl(name) {
 }
 
 function showView(name, titleOverride) {
-    dbg("showView:" + name);
     views.forEach(function (v) {
         var el = $(v + "-view");
-        if (!el) { dbg("showView:MISSING #" + v + "-view"); return; }
+        if (!el) return;
         el.classList.add("hidden");
     });
     var bb = $("back-btn");
-    if (!bb) dbg("showView:MISSING #back-btn");
+    if (!bb) return;
     else bb.classList.toggle("hidden", name.indexOf("detail") === -1);
     var target = ensureViewEl(name);
     target.classList.remove("hidden");
@@ -195,7 +178,6 @@ document.querySelectorAll(".tabbar button").forEach(function (btn) {
         document.querySelectorAll(".tabbar button").forEach(function (b) { b.classList.remove("active"); });
         btn.classList.add("active");
         currentTab = btn.getAttribute("data-tab");
-        dbg("tab-click: " + currentTab);
         state.search = {};
         if (currentTab === "kn") { showView("kn-list"); loadKn(0); }
         else if (currentTab === "obs") { showView("obs-list"); loadObs(0); }
@@ -205,7 +187,6 @@ document.querySelectorAll(".tabbar button").forEach(function (btn) {
                 setStatusVisible(true);
                 renderMe();
             } catch (e) {
-                dbg("me-tab-ERR: " + e.message + " | stack: " + String(e.stack || "").substring(0, 400));
                 setStatusVisible(false);
                 $("me-view").innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>';
             }
@@ -384,10 +365,8 @@ $("obs-next").addEventListener("click", function () { loadObs(state.obsPage + 1)
 // ── پروفایل ───────────────────────────────────────────────────────────────────
 
 async function renderMe() {
-    dbg("renderMe:start");
     try {
         var m = await api("/me");
-        dbg("renderMe:got-data");
         function row(k, v) {
             return '<div class="prow"><span>' + k + '</span><span>' + esc(v || "—") + '</span></div>';
         }
@@ -402,9 +381,7 @@ async function renderMe() {
             '</div>' +
             '<p class="empty" style="padding-top:20px">ویرایش اطلاعات از طریق ربات انجام می‌شود.</p>';
         setStatusVisible(false);
-        dbg("renderMe:done");
     } catch (e) {
-        dbg("renderMe:ERR " + e.message);
         setStatusVisible(false);
         $("me-view").innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>';
         toast(e.message);
@@ -422,7 +399,6 @@ function setStatusVisible(on) {
 
 (async function boot() {
     try {
-        dbg("boot:start");
         if (!TOKEN) {
             await auth();
         } else {
@@ -432,7 +408,6 @@ function setStatusVisible(on) {
         }
         $("loading-screen").classList.add("hidden");
         $("app").classList.remove("hidden");
-        dbg("boot:ok");
         loadKn(0);
     } catch (e) {
         $("loading-screen").classList.add("hidden");

@@ -197,10 +197,3 @@ header {
     font-size: 13px; line-height: 1.9; text-align: center;
     box-shadow: 0 8px 24px rgba(0,0,0,.35);
 }
-.debug-bar {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 60;
-    background: #450a0a; color: #fca5a5;
-    font-size: 11px; padding: 4px 8px;
-    direction: ltr; text-align: left;
-    word-break: break-all;
-}

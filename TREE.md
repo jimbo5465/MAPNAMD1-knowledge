@@ -21,6 +21,15 @@ MAPNAMD1-knowledge/
 ├── test_migration.py              # تست migration دیتابیس قدیمی → جدید
 ├── test_archive_db.py             # تست بایگانی و جستجوی دانش (۱۱ سنجه)
 │
+├── webapp/                        # مینی‌اپ وب (بله/تلگرام) + API
+│   ├── __init__.py
+│   ├── auth.py                    # اعتبارسنجی initData + توکن نشست HMAC
+│   ├── main.py                    # FastAPI — endpoints دانش/مشاهدات/پروفایل/فایل
+│   └── static/                    # فرانت‌اند vanilla JS (RTL، تم خودکار)
+│       ├── index.html
+│       ├── app.js
+│       └── style.css
+│
 ├── db/                            # لایه‌ی دیتابیس مشترک دو پلتفرم (تنها لایه‌ی مجاز SQL)
 │   ├── __init__.py
 │   ├── init.py                    # ساخت جداول + migration خودکار (bale_id / phone_norm)
@@ -64,6 +73,13 @@ MAPNAMD1-knowledge/
 │   ├── dates.py                   # تبدیل تاریخ جلالی/میلادی
 │   ├── jalali_calendar_core.py    # هسته‌ی محاسبات تقویم جلالی
 │   └── validators.py              # اعتبارسنجی
+│
+├── deploy/
+│   └── nginx/
+│       └── knowledge-miniapp.conf # کانفیگ nginx وب‌اپ (HTTPS :2083 + پراکسی /api/)
+│
+├── scripts/
+│   └── backup_db.py               # بکاپ روزانه دیتابیس (cron 3:30)
 │
 ├── data/                          # [runtime] دیتابیس SQLite — مشترک بین هر دو ربات
 │   └── knowledge.db
