@@ -41,6 +41,7 @@ from webapp.auth import (  # noqa: E402
     resolve_session_token,
     validate_init_data,
 )
+from engine.knowledge_draft import entry_display_title  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webapp")
@@ -92,15 +93,8 @@ def _paginate(items: list, page: int) -> tuple[list, int]:
 
 
 def _kn_title(entry: dict) -> str:
-    fields = entry.get("fields_json") or {}
-    title = ""
-    if isinstance(fields, dict):
-        title = str(fields.get("title") or "").strip()
-    if not title:
-        draft = (entry.get("draft_text") or "").strip()
-        raw = (entry.get("raw_description") or "").strip()
-        title = draft or raw or "بدون عنوان"
-    return " ".join(title.split())[:80]
+    """عنوان نمایشی — از هلپر مشترک engine (هدر پیش‌نویس DANA هرگز نمایش داده نمی‌شود)."""
+    return entry_display_title(entry)
 
 
 _KN_TYPE_FA = {

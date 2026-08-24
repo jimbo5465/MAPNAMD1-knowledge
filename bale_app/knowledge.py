@@ -56,7 +56,7 @@ from bale_app.jalali_calendar import (
 from utils.busy_lock import clear_busy, is_busy, set_busy
 from utils.dates import validate_jalali_date_str
 from engine.knowledge_ai import extract_fields, FIELD_SCHEMAS, TYPE_LABELS
-from engine.knowledge_draft import build_report, render_text
+from engine.knowledge_draft import build_report, render_text, entry_display_title
 from engine.knowledge_render import render_dana_pdf, render_dana_docx
 
 logger = logging.getLogger(__name__)
@@ -2545,16 +2545,8 @@ _KN_TYPE_FA = {
 
 
 def _kn_entry_title(entry: dict) -> str:
-    """عنوان نمایشی یک رکورد دانش (از fields یا متن پیش‌نویس)."""
-    fields = entry.get("fields_json") or {}
-    title = ""
-    if isinstance(fields, dict):
-        title = str(fields.get("title") or "").strip()
-    if not title:
-        draft = (entry.get("draft_text") or "").strip()
-        raw = (entry.get("raw_description") or "").strip()
-        title = draft or raw or "بدون عنوان"
-    return " ".join(title.split())[:45]
+    """عنوان نمایشی — از هلپر مشترک engine (هدر پیش‌نویس DANA هرگز نمایش داده نمی‌شود)."""
+    return entry_display_title(entry)
 
 
 def _kn_status_fa(entry: dict) -> str:

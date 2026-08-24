@@ -202,6 +202,65 @@ def build_report(
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# عنوان نمایشی رکورد دانش (مشترک بین ربات‌ها و وب‌اپ)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _clean_md_line(line: str) -> str:
+    """حذف مارک‌داون و کاراکترهای تزئینی از یک سطر."""
+    return line.replace("*", "").replace("_", " ").strip()
+
+
+def extract_title_from_draft(draft: str) -> str:
+    """
+    اولین مقدار معنادار بخش «محتوا» را از متن پیش‌نویس DANA برمی‌گرداند.
+    (هدرِ «📄 پیش‌نویس ثبت دانش در DANA» و خطوط جداکننده نادیده گرفته می‌شود)
+    """
+    try:
+        lines = draft.splitlines()
+        start = 0
+        for i, ln in enumerate(lines):
+            if "محتوا" in ln:
+                start = i + 1
+                break
+        for ln in lines[start:]:
+            t = _clean_md_line(ln)
+            if not t:
+                continue
+            if t.startswith("▫️"):
+                _, _, val = t.partition(":")
+                val = val.strip()
+                if val and val != "—":
+                    return val[:80]
+                continue
+            if t.startswith("────") or t.startswith("منابع") or t.startswith("پیوست"):
+                break
+            return t[:80]
+    except Exception:
+        pass
+    return ""
+
+
+def entry_display_title(entry: dict) -> str:
+    """
+    عنوان نمایشی یک رکورد دانش:
+      ۱. fields_json.title  ۲. اولین سطر raw_description  ۳. بخش محتوای draft_text
+    """
+    fields = entry.get("fields_json") or {}
+    if isinstance(fields, dict):
+        t = str(fields.get("title") or "").strip()
+        if t:
+            return " ".join(t.split())[:80]
+    raw = entry.get("raw_description") or ""
+    for ln in raw.splitlines():
+        c = _clean_md_line(ln)
+        if c:
+            return " ".join(c.split())[:80]
+    draft = entry.get("draft_text") or ""
+    t = extract_title_from_draft(draft)
+    return (" ".join(t.split())[:80]) if t else "بدون عنوان"
+
+
 def render_text(report: dict) -> str:
     """مدل گزارش را به متن قابل‌کپی برای تلگرام تبدیل می‌کند."""
     lines: list[str] = []

@@ -188,3 +188,19 @@ header {
 }
 .tabbar button span { font-size: 11px; }
 .tabbar button.active { color: var(--accent); }
+
+/* ── پیام خطای درون‌صفحه‌ای (جایگزین alert که در وب‌ویوها نمایش داده نمی‌شود) ── */
+.toast {
+    position: fixed; bottom: 84px; left: 12px; right: 12px; z-index: 50;
+    background: #7f1d1d; color: #fecaca;
+    border-radius: 12px; padding: 11px 15px;
+    font-size: 13px; line-height: 1.9; text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.debug-bar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+    background: #450a0a; color: #fca5a5;
+    font-size: 11px; padding: 4px 8px;
+    direction: ltr; text-align: left;
+    word-break: break-all;
+}

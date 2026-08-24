@@ -13,6 +13,23 @@ function setStatus(msg) {
     if (el) el.textContent = msg;
 }
 
+function toast(msg) {
+    var t = $("toast");
+    if (!t) { alert(msg); return; }
+    t.textContent = msg;
+    t.classList.remove("hidden");
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { t.classList.add("hidden"); }, 5000);
+}
+
+// نمایش خطاهای جاوااسکریپت روی صفحه (چون alert در وب‌ویوها حذف می‌شود)
+window.addEventListener("error", function (ev) {
+    var d = $("dbg");
+    if (!d) return;
+    d.style.display = "block";
+    d.textContent = "JS error: " + (ev.message || "?") + " @line " + (ev.lineno || "?");
+});
+
 function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
         return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -180,7 +197,7 @@ async function loadKn(page) {
         $("kn-page-info").textContent = "صفحه " + (page + 1) + " از " + data.pages + " (" + data.total + ")";
         $("kn-prev").disabled = page <= 0;
         $("kn-next").disabled = page >= data.pages - 1;
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
 }
 
 async function openKn(id) {
@@ -200,7 +217,7 @@ async function openKn(id) {
             '</div>';
         $("kn-detail-view").innerHTML = html;
         showView("kn-detail", "📚 جزئیات دانش");
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast(err.message); }
 }
 
 $("kn-search-input").addEventListener("keydown", function (ev) {
@@ -242,7 +259,7 @@ async function loadObs(page) {
         $("obs-page-info").textContent = "صفحه " + (page + 1) + " از " + data.pages + " (" + data.total + ")";
         $("obs-prev").disabled = page <= 0;
         $("obs-next").disabled = page >= data.pages - 1;
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
 }
 
 async function openObs(id) {
@@ -268,7 +285,7 @@ async function openObs(id) {
             '</div>';
         $("obs-detail-view").innerHTML = html;
         showView("obs-detail", "📓 جزئیات مشاهده");
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast(err.message); }
 }
 
 async function fetchAttBlob(id) {
@@ -291,7 +308,7 @@ async function showAttImg(ev, id, el) {
         img.src = URL.createObjectURL(blob);
         $("img-slot").appendChild(img);
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
 }
 
 async function downloadAtt(ev, id, el) {
@@ -306,7 +323,7 @@ async function downloadAtt(ev, id, el) {
         a.click();
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
 }
 
 $("obs-search-input").addEventListener("keydown", function (ev) {
@@ -332,7 +349,10 @@ async function renderMe() {
             row("💼 سمت", m.position) +
             '</div>' +
             '<p class="empty" style="padding-top:20px">ویرایش اطلاعات از طریق ربات انجام می‌شود.</p>';
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+        $("me-view").innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>';
+        toast(e.message);
+    }
 }
 
 // ── شروع ──────────────────────────────────────────────────────────────────────
