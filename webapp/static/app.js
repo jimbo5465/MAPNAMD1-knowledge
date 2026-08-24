@@ -154,6 +154,20 @@ var currentTab = "kn";
 var views = ["kn-list", "kn-detail", "obs-list", "obs-detail", "me"];
 var titles = { kn: "📚 دانش‌های من", obs: "📓 مشاهدات من", me: "👤 پروفایل من" };
 
+function ensureViewEl(name) {
+    var el = $(name + "-view");
+    if (el) return el;
+    dbg("ensureView:create #" + name + "-view");
+    el = document.createElement("main");
+    el.id = name + "-view";
+    el.className = "view hidden";
+    var app = $("app");
+    var nav = document.querySelector(".tabbar");
+    if (nav) app.insertBefore(el, nav);
+    else app.appendChild(el);
+    return el;
+}
+
 function showView(name, titleOverride) {
     dbg("showView:" + name);
     views.forEach(function (v) {
@@ -164,8 +178,7 @@ function showView(name, titleOverride) {
     var bb = $("back-btn");
     if (!bb) dbg("showView:MISSING #back-btn");
     else bb.classList.toggle("hidden", name.indexOf("detail") === -1);
-    var target = $(name + "-view");
-    if (!target) { dbg("showView:MISSING #" + name); return; }
+    var target = ensureViewEl(name);
     target.classList.remove("hidden");
     var pt = $("page-title");
     if (pt) pt.textContent = titleOverride !== undefined ? titleOverride : (titles[currentTab] || "");
@@ -378,7 +391,8 @@ async function renderMe() {
         function row(k, v) {
             return '<div class="prow"><span>' + k + '</span><span>' + esc(v || "—") + '</span></div>';
         }
-        $("me-view").innerHTML =
+        var box = ensureViewEl("me");
+        box.innerHTML =
             '<div class="profile-rows">' +
             row("📛 نام", m.full_name) +
             row("📞 شماره", m.phone) +
