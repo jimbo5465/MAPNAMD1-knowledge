@@ -751,6 +751,16 @@ def list_observation_attachments(observation_id: int) -> list[dict]:
         return _rows_to_dicts(rows)
 
 
+def get_observation_attachment(attachment_id: int) -> dict | None:
+    """یک پیوست مشاهده را با شناسه برمی‌گرداند."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM observation_attachments WHERE id = ?",
+            (attachment_id,),
+        ).fetchone()
+        return _row_to_dict(row)
+
+
 def remove_observation_attachment(attachment_id: int) -> None:
     """یک پیوست را حذف می‌کند."""
     with get_connection() as conn:

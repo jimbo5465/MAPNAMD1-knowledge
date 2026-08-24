@@ -17,7 +17,9 @@ from db.models import (
     add_observation,
     add_observation_attachment,
     archive_observation,
+    get_observation_attachment,
     get_observation_by_id,
+    get_user_by_telegram_id,
     list_observation_attachments,
     list_observations_by_user,
     search_observations,
@@ -164,7 +166,7 @@ def _obs_list_keyboard(obs_list: list[dict], page: int = 0) -> InlineKeyboardMar
     return InlineKeyboardMarkup(rows)
 
 
-def _obs_view_keyboard(obs: dict) -> InlineKeyboardMarkup:
+def _obs_view_keyboard(obs: dict, attachments: list[dict] | None = None) -> InlineKeyboardMarkup:
     rows = []
     if obs.get("status") in ("raw", "maturing"):
         rows.append([InlineKeyboardButton("✏️ افزودن مطلب", callback_data=f"obs:extend:{obs['id']}")])
@@ -172,6 +174,15 @@ def _obs_view_keyboard(obs: dict) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("🗑 بایگانی", callback_data=f"obs:archive:{obs['id']}")])
     elif obs.get("status") == "promoted":
         rows.append([InlineKeyboardButton("🔗 مشاهده دانش", callback_data=f"kn:view:{obs['promoted_to_kn_id']}")])
+    att_buttons = []
+    for i, a in enumerate((attachments or [])[:6], start=1):
+        mime = a.get("mime_type") or ""
+        icon = "🖼️" if mime.startswith("image") else "📄"
+        att_buttons.append(
+            InlineKeyboardButton(f"{icon} پیوست {i}", callback_data=f"obs:getatt:{a['id']}")
+        )
+    for j in range(0, len(att_buttons), 2):
+        rows.append(att_buttons[j:j + 2])
     rows.append([InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -870,7 +881,44 @@ async def obs_view(update, context) -> int:
         + f"\n{content}"
         + "\n".join(att_lines)
     )
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=_obs_view_keyboard(obs))
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=_obs_view_keyboard(obs, attachments))
+
+
+@require_registration
+async def obs_attachment_send(update, context) -> int:
+    """ارسال واقعی فایل پیوست مشاهده. (callback: obs:getatt:<id>)"""
+    query = update.callback_query
+    await query.answer()
+    att_id = int((query.data or "").split(":")[2])
+
+    att = get_observation_attachment(att_id)
+    if not att:
+        await query.message.reply_text("⚠️ پیوست یافت نشد.")
+        return ConversationHandler.END
+
+    user = update.effective_user
+    profile = get_user_by_telegram_id(user.id) if user else None
+    obs = get_observation_by_id(att["observation_id"])
+    if not profile or not obs or obs["telegram_id"] != profile["telegram_id"]:
+        await query.message.reply_text("⛔ این پیوست به حساب شما تعلق ندارد.")
+        return ConversationHandler.END
+
+    path = att.get("file_path") or ""
+    if not path or not os.path.isfile(path):
+        await query.message.reply_text("❌ فایل روی سرور یافت نشد.")
+        return ConversationHandler.END
+
+    mime = (att.get("mime_type") or "").lower()
+    name = os.path.basename(path)
+    try:
+        if mime.startswith("image"):
+            await query.message.reply_photo(path, caption=name)
+        else:
+            await query.message.reply_document(path, caption=name)
+    except Exception:
+        logger.exception("خطا در ارسال پیوست %s", att_id)
+        await query.message.reply_text("❌ خطا در ارسال فایل. دوباره تلاش کنید.")
+    return ConversationHandler.END
     return ConversationHandler.END
 
 
@@ -1156,6 +1204,7 @@ def get_observations_conversation_handler() -> ConversationHandler:
             CallbackQueryHandler(obs_list_start, pattern=r"^obs:list$"),
             CallbackQueryHandler(obs_list_page, pattern=r"^obs:listpage:\d+$"),
             CallbackQueryHandler(obs_view, pattern=r"^obs:view:\d+$"),
+            CallbackQueryHandler(obs_attachment_send, pattern=r"^obs:getatt:\d+$"),
             CallbackQueryHandler(obs_extend_start, pattern=r"^obs:extend:\d+$"),
             CallbackQueryHandler(obs_promote, pattern=r"^obs:promote:\d+$"),
             CallbackQueryHandler(obs_archive, pattern=r"^obs:archive:\d+$"),

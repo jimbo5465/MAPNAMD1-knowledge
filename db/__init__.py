@@ -15,6 +15,7 @@ from db.models import (
     add_observation, list_observations_by_user,
     get_observation_by_id, update_observation,
     promote_observation, archive_observation,
+    get_observation_attachment,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "add_observation", "list_observations_by_user",
     "get_observation_by_id", "update_observation",
     "promote_observation", "archive_observation",
+    "get_observation_attachment",
 ]
