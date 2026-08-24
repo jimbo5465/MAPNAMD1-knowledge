@@ -19,6 +19,7 @@ MAPNAMD1-knowledge/
 │
 ├── test_link_accounts.py          # تست لینک حساب‌های بله/تلگرام (۳۰ سنجه، دیتابیس موقت)
 ├── test_migration.py              # تست migration دیتابیس قدیمی → جدید
+├── test_archive_db.py             # تست بایگانی و جستجوی دانش (۱۱ سنجه)
 │
 ├── db/                            # لایه‌ی دیتابیس مشترک دو پلتفرم (تنها لایه‌ی مجاز SQL)
 │   ├── __init__.py
@@ -39,7 +40,8 @@ MAPNAMD1-knowledge/
 │   ├── __init__.py
 │   ├── registration.py            # ثبت‌نام و پروفایل (+ لینک خودکار حساب بله)
 │   ├── observations.py            # مشاهدات میدانی + جستجو
-│   ├── knowledge.py               # ثبت دانش (دستی + مصاحبه)
+│   ├── knowledge.py               # ثبت دانش (دستی + مصاحبه) + بایگانی دانش
+│   ├── archive.py                 # زیرمنوی «بایگانی و جستجو» (standalone)
 │   ├── auth.py                    # دکوراتور require_registration
 │   ├── keyboards.py               # سازنده‌های keyboard
 │   ├── jalali_calendar.py         # تقویم جلالی تعاملی (تلگرام)
@@ -50,7 +52,8 @@ MAPNAMD1-knowledge/
 │   ├── framework.py               # فریم‌ورک سفارشی بله (Update/Context/Dispatcher/ConversationHandler)
 │   ├── registration.py            # ثبت‌نام و پروفایل (+ لینک خودکار حساب تلگرام)
 │   ├── observations.py            # مشاهدات میدانی + جستجو
-│   ├── knowledge.py               # ثبت دانش (دستی + مصاحبه)
+│   ├── knowledge.py               # ثبت دانش (دستی + مصاحبه) + بایگانی دانش
+│   ├── archive.py                 # زیرمنوی «بایگانی و جستجو» (standalone)
 │   ├── auth.py                    # دکوراتور require_registration
 │   ├── keyboards.py               # سازنده‌های keyboard
 │   └── jalali_calendar.py         # تقویم جلالی تعاملی (بله)

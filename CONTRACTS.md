@@ -69,6 +69,13 @@ resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search
 | `add_observation_attachment` | `(observation_id, file_path, file_name=None, mime_type=None, file_size=None) -> int` |
 | `list_observation_attachments` | `(observation_id) -> list[dict]` |
 
+### `db/models.py` — بایگانی دانش
+
+| تابع | امضا | توضیح |
+|---|---|---|
+| `list_knowledge_by_user` | `(telegram_id, active_only=True) -> list[dict]` | همهٔ دانش‌های کاربر (جدیدترین اول) — شناسهٔ هر پلتفرم |
+| `search_knowledge_by_user` | `(telegram_id, keyword, limit=30) -> list[dict]` | جستجو در kn_number / fields_json / draft_text / raw_description — فقط دانش‌های خود کاربر |
+
 ### ساختار جدول `users`
 
 | ستون | نوع | توضیح |
@@ -148,6 +155,28 @@ OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 | `obs:add_photo:<id>` / `obs:add_file:<id>` | افزودن پیوست |
 | `menu:main` | بازگشت به منو |
 
+### زیرمنوی بایگانی و جستجو
+
+منوی اصلی یک دکمهٔ «🗂️ بایگانی و جستجو» دارد (`archive:open`) که به دو زیربخش می‌رسد.
+هندلرهای `archive:*` در `handlers/archive.py` و `bale_app/archive.py` هستند (standalone).
+
+| الگو | هدف | ثبت‌شده در |
+|---|---|---|
+| `archive:open` | زیرمنو: بایگانی مشاهدات / بایگانی دانش | standalone |
+| `archive:obs` | زیرمنوی مشاهدات → دکمه‌های `obs:list` و `obs:search` | standalone |
+| `archive:kn` | زیرمنوی دانش → دکمه‌های `kn:list` و `kn:search` | standalone |
+| `kn:list` | لیست صفحه‌بندی‌شدهٔ دانش‌های خود کاربر | entry_point دانش |
+| `kn:search` | دریافت عبارت جستجوی دانش | entry_point دانش |
+| `kn:view:<id>` | جزئیات یک دانش (**فقط مالک**؛ لینک «مشاهده دانش» مشاهدات ارتقایی را هم فعال می‌کند) | entry_point دانش |
+| `kn:archpage:N` | صفحهٔ N لیست بایگانی | state `KN_ARCHIVE_LIST` |
+
+States جدید در ConversationHandler دانش (هر دو پلتفرم):
+
+```
+KN_ARCHIVE_LIST = 17   # لیست/نتایج + صفحه‌بندی + مشاهدهٔ جزئیات
+KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
+```
+
 ---
 
 ## قراردادهای Engine
@@ -225,3 +254,4 @@ OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 | 1403/05 | افزودن ثبت‌نام اجباری، مشاهده، جستجو، قفل AI |
 | 1404/06 | پورت کامل روی بله (`bale_app/` + `main_bale.py`) — دو پلتفرم، یک دیتابیس |
 | 1404/06 | **لینک حساب‌های بله/تلگرام**: نرمال‌سازی شماره (`phone_utils`)، ستون‌های `bale_id`/`phone_norm`، لینک خودکار با شماره+کد پرسنلی، ادغام رکوردهای تکراری قدیمی |
+| 1404/06 | **بایگانی و جستجو**: ترکیب دکمه‌های منو، لیست صفحه‌بندی‌شدهٔ دانش‌ها، جستجوی متنی در دانش‌ها (`kn:list` / `kn:search` / `kn:view`) |
