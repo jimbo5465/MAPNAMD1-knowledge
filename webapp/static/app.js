@@ -1,85 +1,115 @@
-/* ربات دانش سازمانی — منطق مینی‌اپ (بدون وابستگی خارجی) */
+/* ربات دانش سازمانی — منطق مینی‌اپ (بدون وابستگی خارجی، سازگار با وب‌ویوهای قدیمی) */
 
-const API = "/api";
-let TOKEN = sessionStorage.getItem("kb_token") || null;
-let ME = null;
+var API = "/api";
+var TOKEN = sessionStorage.getItem("kb_token") || null;
+var ME = null;
 
 // ── ابزار ─────────────────────────────────────────────────────────────────────
 
-const $ = (id) => document.getElementById(id);
+function $(id) { return document.getElementById(id); }
 
-function esc(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    }[c]));
+function setStatus(msg) {
+    var el = $("loading-msg");
+    if (el) el.textContent = msg;
 }
 
-async function api(path, opts = {}) {
-    const res = await fetch(API + path, {
-        ...opts,
-        headers: {
-            "Content-Type": "application/json",
-            ...(TOKEN ? { Authorization: "Bearer " + TOKEN } : {}),
-        },
+function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
-    if (res.status === 401) { TOKEN = null; await auth(); return api(path, opts); }
-    const data = await res.json().catch(() => ({ detail: "پاسخ نامعتبر" }));
+}
+
+async function api(path, opts) {
+    opts = opts || {};
+    var headers = { "Content-Type": "application/json" };
+    if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+    var res = await fetch(API + path, Object.assign({}, opts, { headers: headers }));
+    if (res.status === 401) {
+        TOKEN = null;
+        await auth();
+        return api(path, opts);
+    }
+    var data = {};
+    try { data = await res.json(); } catch (e) { data = { detail: "پاسخ نامعتبر" }; }
     if (!res.ok) throw new Error(data.detail || ("خطا " + res.status));
     return data;
 }
 
-function faDate(s) {
-    if (!s) return "";
-    return s; // تاریخ‌ها از سرور میلادی می‌آیند؛ نمایش ساده
+// ── SDK بله (لود غیرمسدودکننده — اگه در دسترس نبود صفحه نمی‌خوابد) ───────────
+
+var baleSdkPromise = null;
+
+function loadBaleSdk() {
+    if (baleSdkPromise) return baleSdkPromise;
+    baleSdkPromise = new Promise(function (resolve) {
+        try {
+            if (window.Bale && window.Bale.WebApp) { resolve(true); return; }
+            var done = false;
+            var finish = function (ok) { if (!done) { done = true; resolve(ok); } };
+            setTimeout(function () { finish(false); }, 6000);
+            var s = document.createElement("script");
+            s.src = "https://tapi.bale.ai/miniapp.js?3";
+            s.onload = function () { finish(true); };
+            s.onerror = function () { finish(false); };
+            document.head.appendChild(s);
+        } catch (e) { resolve(false); }
+    });
+    return baleSdkPromise;
 }
 
 // ── ورود ──────────────────────────────────────────────────────────────────────
 
 function getInitDataFromUrl() {
-    const p = new URLSearchParams(location.search);
-    let d = p.get("tgWebAppData");
-    if (!d && location.hash) {
-        const h = new URLSearchParams(location.hash.slice(1));
-        d = h.get("tgWebAppData");
-    }
-    return d || "";
+    try {
+        var p = new URLSearchParams(location.search);
+        var d = p.get("tgWebAppData");
+        if (!d && location.hash && location.hash.length > 1) {
+            var h = new URLSearchParams(location.hash.substring(1));
+            d = h.get("tgWebAppData");
+        }
+        return d || "";
+    } catch (e) { return ""; }
 }
 
 /**
- * initData: تلگرام آن را در URL می‌گذارد؛ بله فقط از طریق SDK
- * (window.Bale.WebApp.initData) تحویل می‌دهد — تا ۶ ثانیه منتظر می‌مانیم.
+ * initData: تلگرام آن را در URL می‌گذارد؛ بله فقط از طریق SDK تحویل می‌دهد.
  */
-function getInitData() {
-    return new Promise((resolve) => {
-        const immediate = getInitDataFromUrl();
-        if (immediate) { resolve(immediate); return; }
-        const t0 = Date.now();
-        const timer = setInterval(() => {
-            try {
-                const d = window.Bale?.WebApp?.initData;
-                if (d) { clearInterval(timer); resolve(d); return; }
-            } catch (_) { /* SDK هنوز آماده نیست */ }
-            if (Date.now() - t0 > 6000) { clearInterval(timer); resolve(""); }
-        }, 150);
-    });
+async function getInitData() {
+    var immediate = getInitDataFromUrl();
+    if (immediate) return immediate;
+
+    setStatus("در حال دریافت داده از بله...");
+    var ok = await loadBaleSdk();
+    if (!ok || !window.Bale || !window.Bale.WebApp) return "";
+
+    // بعد از لود SDK چند بار کوتاه امتحان کن (گاهی با تاخیر مقدار می‌گیرد)
+    for (var i = 0; i < 10; i++) {
+        var d = "";
+        try { d = window.Bale.WebApp.initData || ""; } catch (e) { d = ""; }
+        if (d) return d;
+        await new Promise(function (r) { setTimeout(r, 200); });
+    }
+    return "";
 }
 
 function detectPlatform() {
-    if (window.Bale?.WebApp) return "bale";
-    if (window.Telegram?.WebApp) return "telegram";
-    const ua = navigator.userAgent || "";
+    if (window.Bale && window.Bale.WebApp) return "bale";
+    if (window.Telegram && window.Telegram.WebApp) return "telegram";
+    var ua = navigator.userAgent || "";
     return /Telegram/i.test(ua) ? "telegram" : "bale";
 }
 
 async function auth() {
-    const initData = await getInitData();
+    setStatus("در حال احراز هویت...");
+    var initData = await getInitData();
     if (!initData) throw new Error("این صفحه باید از داخل پیام‌رسان باز شود.");
-    const res = await fetch(API + "/auth", {
+    var res = await fetch(API + "/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ init_data: initData, platform: detectPlatform() }),
     });
-    const data = await res.json();
+    var data = {};
+    try { data = await res.json(); } catch (e) {}
     if (!res.ok) throw new Error(data.detail || "ورود ناموفق بود.");
     TOKEN = data.token;
     ME = data.user;
@@ -88,29 +118,28 @@ async function auth() {
 
 // ── ناوبری ────────────────────────────────────────────────────────────────────
 
-let currentTab = "kn";
-const views = ["kn-list", "kn-detail", "obs-list", "obs-detail", "me"];
-const titles = { kn: "📚 دانش‌های من", obs: "📓 مشاهدات من", me: "👤 پروفایل من" };
+var currentTab = "kn";
+var views = ["kn-list", "kn-detail", "obs-list", "obs-detail", "me"];
+var titles = { kn: "📚 دانش‌های من", obs: "📓 مشاهدات من", me: "👤 پروفایل من" };
 
 function showView(name, titleOverride) {
-    views.forEach((v) => $(v + "-view").classList.add("hidden"));
-    $("back-btn").classList.toggle("hidden", !name.includes("detail"));
+    views.forEach(function (v) { $(v + "-view").classList.add("hidden"); });
+    $("back-btn").classList.toggle("hidden", name.indexOf("detail") === -1);
     $(name + "-view").classList.remove("hidden");
-    if (titleOverride !== undefined) $("page-title").textContent = titleOverride;
-    else $("page-title").textContent = titles[currentTab] || "";
+    $("page-title").textContent = titleOverride !== undefined ? titleOverride : (titles[currentTab] || "");
 }
 
-$("back-btn").addEventListener("click", () => {
+$("back-btn").addEventListener("click", function () {
     showView(currentTab + "-list");
     if (currentTab === "kn") loadKn(state.knPage);
     else loadObs(state.obsPage);
 });
 
-document.querySelectorAll(".tabbar button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-        document.querySelectorAll(".tabbar button").forEach((b) => b.classList.remove("active"));
+document.querySelectorAll(".tabbar button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+        document.querySelectorAll(".tabbar button").forEach(function (b) { b.classList.remove("active"); });
         btn.classList.add("active");
-        currentTab = btn.dataset.tab;
+        currentTab = btn.getAttribute("data-tab");
         state.search = {};
         if (currentTab === "kn") { showView("kn-list"); loadKn(0); }
         else if (currentTab === "obs") { showView("obs-list"); loadObs(0); }
@@ -118,38 +147,37 @@ document.querySelectorAll(".tabbar button").forEach((btn) => {
     });
 });
 
-const state = { knPage: 0, knPages: 1, obsPage: 0, obsPages: 1, search: {} };
+var state = { knPage: 0, knPages: 1, obsPage: 0, obsPages: 1, search: {} };
 
 // ── دانش‌ها ───────────────────────────────────────────────────────────────────
 
 function knCard(e) {
-    const statusChip = e.status === "submitted"
+    var statusChip = e.status === "submitted"
         ? '<span class="chip ok">✅ ثبت‌شده</span>'
         : '<span class="chip draft">✏️ پیش‌نویس</span>';
-    return `<div class="card" onclick="openKn(${e.id})">
-        <h3>${esc(e.title)}</h3>
-        <div class="meta">
-            <span class="chip">${esc(e.type)}</span>
-            ${statusChip}
-            ${e.kn_number ? `<span class="chip">${esc(e.kn_number)}</span>` : ""}
-            <span class="chip">${esc(e.date)}</span>
-        </div>
-    </div>`;
+    return '<div class="card" onclick="openKn(' + e.id + ')">' +
+        '<h3>' + esc(e.title) + '</h3>' +
+        '<div class="meta">' +
+        '<span class="chip">' + esc(e.type) + '</span>' +
+        statusChip +
+        (e.kn_number ? '<span class="chip">' + esc(e.kn_number) + '</span>' : "") +
+        '<span class="chip">' + esc(e.date) + '</span>' +
+        '</div></div>';
 }
 
 async function loadKn(page) {
     try {
         state.knPage = page;
-        let data;
-        const q = (state.search.kn || "").trim();
-        if (q) data = await api("/kn/search?q=" + encodeURIComponent(q));
-        else data = await api(`/kn?page=${page}`);
+        var q = (state.search.kn || "").trim();
+        var data = q
+            ? await api("/kn/search?q=" + encodeURIComponent(q))
+            : await api("/kn?page=" + page);
         state.knPages = data.pages;
-        const box = $("kn-list");
+        var box = $("kn-list");
         box.innerHTML = data.items.length
             ? data.items.map(knCard).join("")
             : '<div class="empty">📭 موردی یافت نشد.<br>از ربات می‌توانید دانش ثبت کنید.</div>';
-        $("kn-page-info").textContent = `صفحه ${page + 1} از ${data.pages} (${data.total})`;
+        $("kn-page-info").textContent = "صفحه " + (page + 1) + " از " + data.pages + " (" + data.total + ")";
         $("kn-prev").disabled = page <= 0;
         $("kn-next").disabled = page >= data.pages - 1;
     } catch (e) { alert(e.message); }
@@ -157,32 +185,29 @@ async function loadKn(page) {
 
 async function openKn(id) {
     try {
-        const e = await api("/kn/" + id);
-        const tags = (e.hashtags || []).map((t) => "#" + esc(t)).join(" ");
-        $("kn-detail-view").innerHTML = `
-            <div class="detail-card">
-                <h3 style="margin-bottom:10px">${esc(e.title)}</h3>
-                <div class="row"><b>نوع:</b> ${esc(e.type)}</div>
-                <div class="row"><b>وضعیت:</b> ${e.status === "submitted" ? "✅ ثبت‌شده" : "✏️ پیش‌نویس"}</div>
-                ${e.kn_number ? `<div class="row"><b>شماره:</b> ${esc(e.kn_number)}</div>` : ""}
-                <div class="row"><b>تاریخ:</b> ${esc(e.date)}</div>
-                ${e.tree_path?.length ? `<div class="row"><b>طبقه‌بندی:</b> ${esc(e.tree_path.join(" ← "))}</div>` : ""}
-                ${tags ? `<div class="row"><b>هشتگ:</b> ${tags}</div>` : ""}
-                <hr class="divider">
-                <p class="desc-title">📝 متن:</p>${esc(e.description)}
-            </div>`;
+        var e = await api("/kn/" + id);
+        var tags = (e.hashtags || []).map(function (t) { return "#" + esc(t); }).join(" ");
+        var html = '<div class="detail-card">' +
+            '<h3 style="margin-bottom:10px">' + esc(e.title) + '</h3>' +
+            '<div class="row"><b>نوع:</b> ' + esc(e.type) + '</div>' +
+            '<div class="row"><b>وضعیت:</b> ' + (e.status === "submitted" ? "✅ ثبت‌شده" : "✏️ پیش‌نویس") + '</div>' +
+            (e.kn_number ? '<div class="row"><b>شماره:</b> ' + esc(e.kn_number) + '</div>' : "") +
+            '<div class="row"><b>تاریخ:</b> ' + esc(e.date) + '</div>' +
+            (e.tree_path && e.tree_path.length ? '<div class="row"><b>طبقه‌بندی:</b> ' + esc(e.tree_path.join(" ← ")) + '</div>' : "") +
+            (tags ? '<div class="row"><b>هشتگ:</b> ' + tags + '</div>' : "") +
+            '<hr class="divider">' +
+            '<p class="desc-title">📝 متن:</p>' + esc(e.description) +
+            '</div>';
+        $("kn-detail-view").innerHTML = html;
         showView("kn-detail", "📚 جزئیات دانش");
     } catch (err) { alert(err.message); }
 }
 
-$("kn-search-input").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-        state.search.kn = ev.target.value;
-        loadKn(0);
-    }
+$("kn-search-input").addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") { state.search.kn = ev.target.value; loadKn(0); }
 });
-$("kn-prev").addEventListener("click", () => loadKn(state.knPage - 1));
-$("kn-next").addEventListener("click", () => loadKn(state.knPage + 1));
+$("kn-prev").addEventListener("click", function () { loadKn(state.knPage - 1); });
+$("kn-next").addEventListener("click", function () { loadKn(state.knPage + 1); });
 
 // ── مشاهدات ───────────────────────────────────────────────────────────────────
 
@@ -191,31 +216,30 @@ function statusFa(s) {
 }
 
 function obsCard(o) {
-    const atts = o.attachments || [];
-    const attChip = atts.length ? `<span class="chip">📎 ${atts.length}</span>` : "";
-    return `<div class="card" onclick="openObs(${o.id})">
-        <h3>${esc(o.title)}</h3>
-        <div class="meta">
-            <span class="chip">${statusFa(o.status)}</span>
-            ${attChip}
-            <span class="chip">${esc(faDate(o.date))}</span>
-        </div>
-    </div>`;
+    var atts = o.attachments || [];
+    var attChip = atts.length ? '<span class="chip">📎 ' + atts.length + '</span>' : "";
+    return '<div class="card" onclick="openObs(' + o.id + ')">' +
+        '<h3>' + esc(o.title) + '</h3>' +
+        '<div class="meta">' +
+        '<span class="chip">' + statusFa(o.status) + '</span>' +
+        attChip +
+        '<span class="chip">' + esc(o.date) + '</span>' +
+        '</div></div>';
 }
 
 async function loadObs(page) {
     try {
         state.obsPage = page;
-        let data;
-        const q = (state.search.obs || "").trim();
-        if (q) data = await api("/obs/search?q=" + encodeURIComponent(q));
-        else data = await api(`/obs?page=${page}`);
+        var q = (state.search.obs || "").trim();
+        var data = q
+            ? await api("/obs/search?q=" + encodeURIComponent(q))
+            : await api("/obs?page=" + page);
         state.obsPages = data.pages;
-        const box = $("obs-list");
+        var box = $("obs-list");
         box.innerHTML = data.items.length
             ? data.items.map(obsCard).join("")
             : '<div class="empty">📭 موردی یافت نشد.</div>';
-        $("obs-page-info").textContent = `صفحه ${page + 1} از ${data.pages} (${data.total})`;
+        $("obs-page-info").textContent = "صفحه " + (page + 1) + " از " + data.pages + " (" + data.total + ")";
         $("obs-prev").disabled = page <= 0;
         $("obs-next").disabled = page >= data.pages - 1;
     } catch (e) { alert(e.message); }
@@ -223,88 +247,91 @@ async function loadObs(page) {
 
 async function openObs(id) {
     try {
-        const o = await api("/obs/" + id);
-        const tags = String(o.tags || "").trim();
-        const attsHtml = (o.attachments || []).map((a) =>
-            a.is_image
-                ? `<span class="att-chip" onclick="showAttImg(event,${a.id},this)">🖼️ ${esc(a.name || "عکس")}</span>`
-                : `<a class="att-chip" href="/api/file/obs-att/${a.id}" download onclick="downloadAtt(event,${a.id})">📄 ${esc(a.name || "فایل")}</a>`
-        ).join("");
-        $("obs-detail-view").innerHTML = `
-            <div class="detail-card">
-                <h3 style="margin-bottom:10px">${esc(o.title)}</h3>
-                <div class="row"><b>وضعیت:</b> ${statusFa(o.status)}</div>
-                <div class="row"><b>تاریخ:</b> ${esc(o.date)}</div>
-                ${tags ? `<div class="row"><b>هشتگ:</b> ${esc(tags)}</div>` : ""}
-                <hr class="divider">
-                ${esc(o.content)}
-                ${o.attachments?.length ? `<p class="desc-title" style="margin-top:12px">📎 پیوست‌ها:</p><div class="att-list">${attsHtml}</div><div id="img-slot"></div>` : ""}
-            </div>`;
+        var o = await api("/obs/" + id);
+        var tags = String(o.tags || "").trim();
+        var attsHtml = "";
+        (o.attachments || []).forEach(function (a) {
+            attsHtml += a.is_image
+                ? '<span class="att-chip" onclick="showAttImg(event,' + a.id + ',this)">🖼️ ' + esc(a.name || "عکس") + '</span>'
+                : '<a class="att-chip" onclick="downloadAtt(event,' + a.id + ',this)">📄 ' + esc(a.name || "فایل") + '</a>';
+        });
+        var html = '<div class="detail-card">' +
+            '<h3 style="margin-bottom:10px">' + esc(o.title) + '</h3>' +
+            '<div class="row"><b>وضعیت:</b> ' + statusFa(o.status) + '</div>' +
+            '<div class="row"><b>تاریخ:</b> ' + esc(o.date) + '</div>' +
+            (tags ? '<div class="row"><b>هشتگ:</b> ' + esc(tags) + '</div>' : "") +
+            '<hr class="divider">' +
+            esc(o.content) +
+            ((o.attachments && o.attachments.length)
+                ? '<p class="desc-title" style="margin-top:12px">📎 پیوست‌ها:</p><div class="att-list">' + attsHtml + '</div><div id="img-slot"></div>'
+                : "") +
+            '</div>';
+        $("obs-detail-view").innerHTML = html;
         showView("obs-detail", "📓 جزئیات مشاهده");
     } catch (err) { alert(err.message); }
+}
+
+async function fetchAttBlob(id) {
+    var res = await fetch(API + "/file/obs-att/" + id, {
+        headers: { Authorization: "Bearer " + TOKEN },
+    });
+    if (!res.ok) throw new Error("دریافت فایل ناموفق بود.");
+    return await res.blob();
 }
 
 async function showAttImg(ev, id, el) {
     ev.stopPropagation();
     try {
-        const res = await fetch(`${API}/file/obs-att/${id}`, {
-            headers: { Authorization: "Bearer " + TOKEN },
-        });
-        if (!res.ok) throw new Error("دریافت فایل ناموفق بود.");
-        const blob = await res.blob();
-        let img = document.getElementById("att-img-" + id);
-        if (img) { img.remove(); return; }
-        img = document.createElement("img");
+        var blob = await fetchAttBlob(id);
+        var old = document.getElementById("att-img-" + id);
+        if (old) { old.parentNode.removeChild(old); return; }
+        var img = document.createElement("img");
         img.className = "att-img";
         img.id = "att-img-" + id;
         img.src = URL.createObjectURL(blob);
-        document.getElementById("img-slot").appendChild(img);
+        $("img-slot").appendChild(img);
         el.scrollIntoView({ behavior: "smooth", block: "center" });
     } catch (e) { alert(e.message); }
 }
 
-async function downloadAtt(ev, id) {
+async function downloadAtt(ev, id, el) {
     ev.stopPropagation();
     try {
-        const res = await fetch(`${API}/file/obs-att/${id}`, {
-            headers: { Authorization: "Bearer " + TOKEN },
-        });
-        if (!res.ok) throw new Error("دریافت فایل ناموفق بود.");
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
+        var blob = await fetchAttBlob(id);
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
         a.href = url;
-        a.download = ev.currentTarget.textContent.trim() || "attachment";
+        a.download = (el.textContent || "attachment").replace(/^[^ ]+ /, "").trim() || "attachment";
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
     } catch (e) { alert(e.message); }
 }
 
-$("obs-search-input").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-        state.search.obs = ev.target.value;
-        loadObs(0);
-    }
+$("obs-search-input").addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") { state.search.obs = ev.target.value; loadObs(0); }
 });
-$("obs-prev").addEventListener("click", () => loadObs(state.obsPage - 1));
-$("obs-next").addEventListener("click", () => loadObs(state.obsPage + 1));
+$("obs-prev").addEventListener("click", function () { loadObs(state.obsPage - 1); });
+$("obs-next").addEventListener("click", function () { loadObs(state.obsPage + 1); });
 
 // ── پروفایل ───────────────────────────────────────────────────────────────────
 
 async function renderMe() {
     try {
-        const m = await api("/me");
-        const row = (k, v) =>
-            `<div class="prow"><span>${k}</span><span>${esc(v || "—")}</span></div>`;
-        $("me-view").innerHTML = `
-            <div class="profile-rows">
-                ${row("📛 نام", m.full_name)}
-                ${row("📞 شماره", m.phone)}
-                ${row("🆔 کد پرسنلی", m.personnel_code)}
-                ${row("🏗️ پروژه", m.project_name)}
-                ${row("💼 سمت", m.position)}
-            </div>
-            <p class="empty" style="padding-top:20px">ویرایش اطلاعات از طریق ربات انجام می‌شود.</p>`;
+        var m = await api("/me");
+        function row(k, v) {
+            return '<div class="prow"><span>' + k + '</span><span>' + esc(v || "—") + '</span></div>';
+        }
+        $("me-view").innerHTML =
+            '<div class="profile-rows">' +
+            row("📛 نام", m.full_name) +
+            row("📞 شماره", m.phone) +
+            row("🆔 کد پرسنلی", m.personnel_code) +
+            row("🏗️ پروژه", m.project_name) +
+            row("💼 سمت", m.position) +
+            '</div>' +
+            '<p class="empty" style="padding-top:20px">ویرایش اطلاعات از طریق ربات انجام می‌شود.</p>';
     } catch (e) { alert(e.message); }
 }
 
@@ -312,11 +339,12 @@ async function renderMe() {
 
 (async function boot() {
     try {
-        if (!TOKEN) await auth();
-        else {
-            // اعتبار توکن ذخیره‌شده را با یک فراخوانی سبک بررسی کن
+        if (!TOKEN) {
+            await auth();
+        } else {
+            setStatus("در حال بازیابی نشست...");
             try { await api("/me"); }
-            catch (e) { TOKEN = null; await auth(); }
+            catch (e2) { TOKEN = null; await auth(); }
         }
         $("loading-screen").classList.add("hidden");
         $("app").classList.remove("hidden");
