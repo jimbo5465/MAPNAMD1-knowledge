@@ -103,16 +103,30 @@ class ReplyKeyboardRemove:
         return _BaleMenuMarkup()
 
 
+class _BaleWebAppButton(bale.InlineKeyboardButton):
+    """دکمهٔ مینی‌اپ — کتابخانه web_app ندارد؛ مستقیم در خروجی JSON تزریق می‌شود."""
+
+    def __init__(self, text: str, web_app_url: str):
+        super().__init__(text=text)
+        self._webapp_url = web_app_url
+
+    def to_dict(self) -> dict:
+        return {"text": self.text, "web_app": {"url": self._webapp_url}}
+
+
 class InlineKeyboardButton:
     """معادل telegram.InlineKeyboardButton."""
 
     def __init__(self, text: str, callback_data: str | None = None,
-                 url: str | None = None) -> None:
+                 url: str | None = None, web_app: str | None = None) -> None:
         self.text = text
         self.callback_data = callback_data
         self.url = url
+        self.web_app = web_app
 
-    def to_bale(self) -> _BaleInlineButton:
+    def to_bale(self) -> bale.InlineKeyboardButton:
+        if self.web_app:
+            return _BaleWebAppButton(text=self.text, web_app_url=self.web_app)
         return _BaleInlineButton(
             text=self.text, callback_data=self.callback_data, url=self.url,
         )

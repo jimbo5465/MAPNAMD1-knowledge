@@ -19,6 +19,7 @@ def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📓 ثبت مشاهده", callback_data="obs:new")],
         [InlineKeyboardButton("📝 ثبت دانش/تجربه سازمانی", callback_data="kn:new")],
         [InlineKeyboardButton("🗂️ بایگانی و جستجو", callback_data="archive:open")],
+        [InlineKeyboardButton("🌐 نسخهٔ وب", web_app="https://web.mohsekarim8.ir")],
         [InlineKeyboardButton("👤 پروفایل من", callback_data="profile:view")],
     ]
     return InlineKeyboardMarkup(buttons)
