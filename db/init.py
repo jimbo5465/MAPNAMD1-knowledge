@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from config import DB_PATH
+from db.phone_utils import normalize_phone
 
 
 def get_connection() -> sqlite3.Connection:
@@ -39,8 +40,10 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id       INTEGER NOT NULL UNIQUE,
+                bale_id           INTEGER UNIQUE,
                 full_name         TEXT    NOT NULL,
                 phone             TEXT,
+                phone_norm        TEXT,
                 personnel_code    TEXT,
                 project_name      TEXT,
                 position          TEXT,
@@ -148,5 +151,27 @@ def init_db() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_obs_attachments_obs ON observation_attachments(observation_id)"
         )
+
+        # ── migration لینک حساب‌های بله و تلگرام ─────────────────────────
+        # ستون‌های bale_id و phone_norm برای دیتابیس‌های قدیمی اضافه می‌شود
+        ucols = [row[1] for row in cur.execute("PRAGMA table_info(users)").fetchall()]
+        if ucols and "bale_id" not in ucols:
+            cur.execute("ALTER TABLE users ADD COLUMN bale_id INTEGER")
+        if ucols and "phone_norm" not in ucols:
+            cur.execute("ALTER TABLE users ADD COLUMN phone_norm TEXT")
+
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_bale_id ON users(bale_id) "
+            "WHERE bale_id IS NOT NULL"
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_phone_norm ON users(phone_norm)")
+
+        # پرکردن phone_norm برای رکوردهای قدیمی که هنوز مقدار ندارند
+        for uid_, ph in cur.execute(
+            "SELECT id, phone FROM users WHERE phone IS NOT NULL AND phone_norm IS NULL"
+        ).fetchall():
+            norm = normalize_phone(ph)
+            if norm:
+                cur.execute("UPDATE users SET phone_norm = ? WHERE id = ?", (norm, uid_))
 
         conn.commit()

@@ -14,6 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from db.init import get_connection
+from db.phone_utils import normalize_phone
 
 
 # ─── کمکی ────────────────────────────────────────────────────────────────────
@@ -43,55 +44,221 @@ def add_user(
     personnel_code: str | None = None,
     project_name: str | None = None,
     position: str | None = None,
+    bale_id: int | None = None,
 ) -> int:
     """کاربر جدید ثبت می‌کند. اگر telegram_id تکراری باشد، به‌روز می‌کند."""
     with get_connection() as conn:
         now = _now_str()
         cur = conn.execute(
             """
-            INSERT INTO users (telegram_id, full_name, phone, personnel_code,
-                               project_name, position, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            INSERT INTO users (telegram_id, bale_id, full_name, phone, phone_norm,
+                               personnel_code, project_name, position,
+                               is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON CONFLICT(telegram_id) DO UPDATE SET
+                bale_id = COALESCE(excluded.bale_id, users.bale_id),
                 full_name = excluded.full_name,
                 phone = excluded.phone,
+                phone_norm = COALESCE(excluded.phone_norm, users.phone_norm),
                 personnel_code = excluded.personnel_code,
                 project_name = excluded.project_name,
                 position = excluded.position,
                 updated_at = excluded.updated_at
             """,
-            (telegram_id, full_name, phone, personnel_code,
-             project_name, position, now, now),
+            (telegram_id, bale_id, full_name, phone, normalize_phone(phone),
+             personnel_code, project_name, position, now, now),
         )
         conn.commit()
         return cur.lastrowid
 
 
-def get_user_by_telegram_id(telegram_id: int) -> dict | None:
-    """کاربر را با telegram_id پیدا می‌کند."""
+def get_user_by_platform_id(platform_id: int) -> dict | None:
+    """
+    کاربر را با شناسهٔ هر پلتفرم پیدا می‌کند (telegram_id یا bale_id).
+    این تابع هستهٔ لینک حساب‌هاست — یک رکورد کاربر ممکن است هر دو شناسه را داشته باشد.
+    """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE telegram_id = ? AND is_active = 1",
-            (telegram_id,),
+            """SELECT * FROM users
+               WHERE is_active = 1 AND (telegram_id = ? OR bale_id = ?)
+               ORDER BY CASE WHEN telegram_id = ? THEN 0 ELSE 1 END
+               LIMIT 1""",
+            (platform_id, platform_id, platform_id),
         ).fetchone()
         return _row_to_dict(row)
 
 
-def update_user(telegram_id: int, **fields) -> None:
-    """به‌روزرسانی فیلدهای کاربر (full_name, phone, personnel_code, project_name, position)."""
+def get_user_by_telegram_id(telegram_id: int) -> dict | None:
+    """کاربر را با شناسهٔ پلتفرم پیدا می‌کند (سازگاری قدیمی — جستجو در هر دو ستون)."""
+    return get_user_by_platform_id(telegram_id)
+
+
+def update_user(platform_id: int, **fields) -> None:
+    """به‌روزرسانی فیلدهای کاربر (full_name, phone, personnel_code, project_name, position).
+    ورودی می‌تواند شناسهٔ تلگرام یا بله باشد."""
     allowed = {"full_name", "phone", "personnel_code", "project_name", "position"}
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
-    if not updates:
+    user = get_user_by_platform_id(platform_id)
+    if not updates or user is None:
         return
+    norm = normalize_phone(updates["phone"]) if "phone" in updates else None
+    if norm:
+        updates["phone_norm"] = norm
     updates["updated_at"] = _now_str()
     set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [telegram_id]
+    values = list(updates.values()) + [user["id"]]
     with get_connection() as conn:
         conn.execute(
-            f"UPDATE users SET {set_clause} WHERE telegram_id = ?",
+            f"UPDATE users SET {set_clause} WHERE id = ?",
             values,
         )
         conn.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# لینک حساب‌های بله و تلگرام — تطبیق با شمارهٔ نرمال‌شده + کد پرسنلی
+# ══════════════════════════════════════════════════════════════════════════════
+
+def find_linkable_user(phone: str | None, personnel_code: str | None) -> dict | None:
+    """
+    کاربر موجودی را پیدا می‌کند که شمارهٔ نرمال‌شده و کد پرسنلی‌اش
+    با ورودی مطابقت دارد (هر دو شرط الزامی — کد پرسنلی به‌عنوان لایهٔ امنیتی).
+    اولویت با رکوردهایی است که از قبل حساب بله دارند.
+    """
+    norm = normalize_phone(phone)
+    pc = (personnel_code or "").strip()
+    if not norm or not pc:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT * FROM users
+               WHERE is_active = 1 AND phone_norm = ?
+                 AND TRIM(personnel_code) = ?
+               ORDER BY CASE WHEN bale_id IS NOT NULL THEN 0 ELSE 1 END, id DESC
+               LIMIT 1""",
+            (norm, pc),
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def link_platform_account(db_user_id: int, platform_id: int, platform: str) -> None:
+    """شناسهٔ پلتفرم (bale/telegram) را به رکورد موجود کاربر متصل می‌کند."""
+    if platform == "bale":
+        col = "bale_id"
+    elif platform == "telegram":
+        col = "telegram_id"
+    else:
+        raise ValueError(f"پلتفرم نامعتبر: {platform!r}")
+    with get_connection() as conn:
+        conn.execute(
+            f"UPDATE users SET {col} = ?, updated_at = ? WHERE id = ?",
+            (platform_id, _now_str(), db_user_id),
+        )
+        conn.commit()
+
+
+def _reassign_observations_owner(from_key: int, to_key: int) -> None:
+    """کلید مالکیت مشاهدات را تغییر می‌دهد (موقع ادغام حساب‌ها)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE observations SET telegram_id = ? WHERE telegram_id = ?",
+            (to_key, from_key),
+        )
+        conn.commit()
+
+
+def deactivate_duplicate_accounts(
+    platform_id: int,
+    keep_db_id: int,
+    future_owner_key: int | None = None,
+) -> int:
+    """
+    رکوردهای تکراری قدیمی (ثبت جداگانهٔ یک شخص در دو پلتفرم قبل از قابلیت لینک)
+    را غیرفعال می‌کند و دانش/مشاهداتشان را به حساب اصلی منتقل می‌کند.
+    future_owner_key: اگر لینک قرار است telegram_id رکورد اصلی را عوض کند،
+    کلید مالکیت نهایی را همینجا بدهید تا داده‌ها به مقدار جدید منتقل شوند.
+    خروجی: تعداد رکوردهای ادغام‌شده.
+    """
+    moved = 0
+    with get_connection() as conn:
+        keep = conn.execute("SELECT * FROM users WHERE id = ?", (keep_db_id,)).fetchone()
+        if keep is None:
+            return 0
+        owner_key = future_owner_key if future_owner_key is not None else keep["telegram_id"]
+        dups = conn.execute(
+            """SELECT * FROM users
+               WHERE is_active = 1 AND id != ?
+                 AND (telegram_id = ? OR bale_id = ?)""",
+            (keep_db_id, platform_id, platform_id),
+        ).fetchall()
+        for dup in dups:
+            conn.execute(
+                "UPDATE knowledge_entries SET reported_by = ? WHERE reported_by = ?",
+                (keep_db_id, dup["id"]),
+            )
+            conn.execute(
+                "UPDATE observations SET telegram_id = ? WHERE telegram_id = ?",
+                (owner_key, dup["telegram_id"]),
+            )
+            # رکورد غیرفعال نباید مقدار پلتفرمیِ در حال لینک را نگه دارد
+            # (قید UNIQUE) — شناسهٔ تلگرام به sentinel منفی تغییر می‌کند.
+            # شناسه‌های واقعی پلتفرم همیشه مثبت هستند، پس تداخلی پیش نمی‌آید.
+            new_tg = -(dup["id"]) if dup["telegram_id"] == platform_id else dup["telegram_id"]
+            conn.execute(
+                "UPDATE users SET is_active = 0, telegram_id = ?, bale_id = NULL, updated_at = ? WHERE id = ?",
+                (new_tg, _now_str(), dup["id"]),
+            )
+            moved += 1
+        conn.commit()
+    return moved
+
+
+def register_or_link_user(
+    *,
+    platform: str,
+    platform_id: int,
+    full_name: str,
+    phone: str | None = None,
+    personnel_code: str | None = None,
+    project_name: str | None = None,
+    position: str | None = None,
+) -> tuple[int, bool]:
+    """
+    ثبت‌نام جدید یا اتصال به حساب موجود.
+    اگر کاربری با همان شمارهٔ نرمال‌شده + کد پرسنلی قبلاً ثبت شده باشد،
+    حساب فعلی به آن رکورد لینک می‌شود (خروجی: linked=True) و
+    رکوردهای تکراری قدیمی ادغام می‌شوند.
+    خروجی: (user_db_id، آیا لینک شد؟)
+    """
+    match = find_linkable_user(phone, personnel_code)
+    if match is not None:
+        already_mine = (
+            match.get("bale_id") == platform_id
+            if platform == "bale"
+            else match.get("telegram_id") == platform_id
+        )
+        if not already_mine:
+            if platform == "telegram" and match["telegram_id"] != platform_id:
+                # رکورد اصلی از قبل با کلید دیگری ثبت شده (مثلاً ثبت اولیه در بله)
+                # — ابتدا تکراری‌ها آزاد و داده‌های همه به کلید جدید منتقل می‌شود
+                deactivate_duplicate_accounts(platform_id, match["id"], future_owner_key=platform_id)
+                _reassign_observations_owner(match["telegram_id"], platform_id)
+                link_platform_account(match["id"], platform_id, platform)
+            else:
+                deactivate_duplicate_accounts(platform_id, match["id"])
+                link_platform_account(match["id"], platform_id, platform)
+            return match["id"], True
+        return match["id"], False
+    uid = add_user(
+        telegram_id=platform_id,
+        full_name=full_name,
+        phone=phone,
+        personnel_code=personnel_code,
+        project_name=project_name,
+        position=position,
+        bale_id=platform_id if platform == "bale" else None,
+    )
+    return uid, False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -345,14 +512,16 @@ def get_knowledge_org_metadata(knowledge_id: int) -> dict:
 
 
 def find_pending_knowledge_by_user(telegram_id: int) -> dict | None:
-    """پیش‌نویس فعال (draft) کاربر را پیدا می‌کند."""
+    """پیش‌نویس فعال (draft) کاربر را پیدا می‌کند. ورودی: شناسهٔ هر پلتفرم."""
+    user = get_user_by_platform_id(telegram_id)
+    if user is None:
+        return None
     with get_connection() as conn:
         row = conn.execute(
             """SELECT ke.* FROM knowledge_entries ke
-               JOIN users u ON u.id = ke.reported_by
-               WHERE u.telegram_id = ? AND ke.status = 'draft' AND ke.is_active = 1
+               WHERE ke.reported_by = ? AND ke.status = 'draft' AND ke.is_active = 1
                ORDER BY ke.id DESC LIMIT 1""",
-            (telegram_id,),
+            (user["id"],),
         ).fetchone()
         return _deserialize_knowledge(row)
 
@@ -369,14 +538,17 @@ def add_observation(
     title: str | None = None,
     obs_date: str | None = None,
 ) -> int:
-    """یک مشاهدهٔ جدید ثبت می‌کند (وضعیت: raw)."""
+    """یک مشاهدهٔ جدید ثبت می‌کند (وضعیت: raw). ورودی: شناسهٔ هر پلتفرم."""
     now = _now_str()
+    user = get_user_by_platform_id(telegram_id)
+    if user is None:
+        raise ValueError(f"کاربر با شناسهٔ پلتفرم={telegram_id} یافت نشد.")
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO observations (telegram_id, title, content, status,
                project_name, tags, obs_date, created_at, updated_at)
                VALUES (?, ?, ?, 'raw', ?, ?, ?, ?, ?)""",
-            (telegram_id, title, content, project_name,
+            (user["telegram_id"], title, content, project_name,
              json.dumps(tags or [], ensure_ascii=False), obs_date, now, now),
         )
         conn.commit()
@@ -384,17 +556,21 @@ def add_observation(
 
 
 def list_observations_by_user(telegram_id: int, status: str | None = None) -> list[dict]:
-    """مشاهدات یک کاربر (جدیدترین اول)."""
+    """مشاهدات یک کاربر (جدیدترین اول). ورودی: شناسهٔ هر پلتفرم."""
+    user = get_user_by_platform_id(telegram_id)
+    if user is None:
+        return []
+    owner_key = user["telegram_id"]
     with get_connection() as conn:
         if status:
             rows = conn.execute(
                 "SELECT * FROM observations WHERE telegram_id = ? AND status = ? ORDER BY id DESC",
-                (telegram_id, status),
+                (owner_key, status),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT * FROM observations WHERE telegram_id = ? ORDER BY id DESC",
-                (telegram_id,),
+                (owner_key,),
             ).fetchall()
         return _rows_to_dicts(rows)
 
@@ -470,13 +646,17 @@ def search_observations(
 ) -> list[dict]:
     """
     جستجو در مشاهدات کاربر.
+    - ورودی: شناسهٔ هر پلتفرم (تلگرام یا بله)
     - keyword: جستجو در title و content
     - hashtag: جستجوی هشتگ (بدون #)
     - obs_date: تاریخ میلادی 'YYYY-MM-DD' یا 'YYYY-MM' (جستجوی ماه)
     """
+    user = get_user_by_platform_id(telegram_id)
+    if user is None:
+        return []
     with get_connection() as conn:
         sql = "SELECT * FROM observations WHERE telegram_id = ?"
-        params: list = [telegram_id]
+        params: list = [user["telegram_id"]]
 
         if keyword:
             sql += " AND (title LIKE ? OR content LIKE ?)"

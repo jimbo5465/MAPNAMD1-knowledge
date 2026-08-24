@@ -30,7 +30,7 @@ from telegram.ext import (
     filters,
 )
 
-from db.models import add_user, get_user_by_telegram_id, update_user
+from db.models import get_user_by_telegram_id, register_or_link_user, update_user
 from handlers.keyboards import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
@@ -200,18 +200,26 @@ async def _finish_registration(update: Update, context: ContextTypes.DEFAULT_TYP
     if not user:
         return
 
+    linked = False
     try:
-        add_user(
-            telegram_id=user.id,
+        # ثبت‌نام جدید یا اتصال به حساب بلهٔ همان شخص
+        # (تطبیق: شمارهٔ نرمال‌شده + کد پرسنلی — لایهٔ امنیتی)
+        _, linked = register_or_link_user(
+            platform="telegram",
+            platform_id=user.id,
             full_name=context.user_data.get("reg_name", user.full_name or "کاربر"),
             phone=context.user_data.get("reg_phone"),
             personnel_code=context.user_data.get("reg_personnel_code"),
             project_name=context.user_data.get("reg_project"),
             position=context.user_data.get("reg_position"),
         )
-        logger.info("کاربر جدید ثبت شد: %d (%s)", user.id, context.user_data.get("reg_name"))
+        if linked:
+            logger.info("حساب تلگرام به حساب موجود متصل شد: %d", user.id)
+        else:
+            logger.info("کاربر جدید ثبت شد: %d (%s)", user.id, context.user_data.get("reg_name"))
     except Exception:
         logger.exception("خطا در ثبت کاربر: %d", user.id)
+        linked = False
 
     # پاکسازی داده‌های موقت
     for key in list(context.user_data):
@@ -223,6 +231,8 @@ async def _finish_registration(update: Update, context: ContextTypes.DEFAULT_TYP
         "به ربات دانش سازمانی مپنا توسعه یک خوش آمدید.\n"
         "از منوی زیر می‌توانید استفاده کنید:"
     )
+    if linked:
+        text += "\n\n🔗 حساب تلگرام شما به حساب بله‌تان متصل شد — دانش‌ها و مشاهدات شما در هر دو پلتفرم مشترک است."
     if update.callback_query:
         await update.callback_query.edit_message_text(
             text, parse_mode="Markdown",

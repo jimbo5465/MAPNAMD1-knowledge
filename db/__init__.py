@@ -1,6 +1,8 @@
 """پکیج db — دسترسی به پایگاه داده مستقل MAPNAMD1-knowledge."""
 from db.models import (
-    add_user, get_user_by_telegram_id, update_user,
+    add_user, get_user_by_telegram_id, get_user_by_platform_id, update_user,
+    find_linkable_user, link_platform_account,
+    deactivate_duplicate_accounts, register_or_link_user,
     add_knowledge_entry, get_knowledge_entry_by_id,
     set_knowledge_fields, submit_knowledge_entry,
     set_knowledge_inactive, list_knowledge_entries,
@@ -15,7 +17,9 @@ from db.models import (
 )
 
 __all__ = [
-    "add_user", "get_user_by_telegram_id", "update_user",
+    "add_user", "get_user_by_telegram_id", "get_user_by_platform_id", "update_user",
+    "find_linkable_user", "link_platform_account",
+    "deactivate_duplicate_accounts", "register_or_link_user",
     "add_knowledge_entry", "get_knowledge_entry_by_id",
     "set_knowledge_fields", "submit_knowledge_entry",
     "set_knowledge_inactive", "list_knowledge_entries",

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from db.models import add_user, get_user_by_telegram_id, update_user
+from db.models import get_user_by_telegram_id, register_or_link_user, update_user
 from bale_app.framework import (
     ConversationHandler,
     CallbackQueryHandler,
@@ -193,19 +193,26 @@ async def _finish_registration(update, context) -> None:
     if not user:
         return
 
+    linked = False
     try:
-        # ستون telegram_id در DB = شناسه کاربر در پیام‌رسان (بله)
-        add_user(
-            telegram_id=user.id,
+        # ثبت‌نام جدید یا اتصال به حساب تلگرامیِ همان شخص
+        # (تطبیق: شمارهٔ نرمال‌شده + کد پرسنلی — لایهٔ امنیتی)
+        _, linked = register_or_link_user(
+            platform="bale",
+            platform_id=user.id,
             full_name=context.user_data.get("reg_name", user.first_name or "کاربر"),
             phone=context.user_data.get("reg_phone"),
             personnel_code=context.user_data.get("reg_personnel_code"),
             project_name=context.user_data.get("reg_project"),
             position=context.user_data.get("reg_position"),
         )
-        logger.info("کاربر جدید ثبت شد: %d (%s)", user.id, context.user_data.get("reg_name"))
+        if linked:
+            logger.info("حساب بله به حساب موجود متصل شد: %d", user.id)
+        else:
+            logger.info("کاربر بله ثبت شد: %d (%s)", user.id, context.user_data.get("reg_name"))
     except Exception:
         logger.exception("خطا در ثبت کاربر: %d", user.id)
+        linked = False
 
     # پاکسازی داده‌های موقت
     for key in list(context.user_data):
@@ -217,6 +224,8 @@ async def _finish_registration(update, context) -> None:
         "به ربات دانش سازمانی مپنا توسعه یک خوش آمدید.\n"
         "از منوی زیر می‌توانید استفاده کنید:"
     )
+    if linked:
+        text += "\n\n🔗 حساب بله شما به حساب تلگرامی‌تان متصل شد — دانش‌ها و مشاهدات شما در هر دو پلتفرم مشترک است."
     if update.callback_query:
         await update.callback_query.edit_message_text(
             text, parse_mode="Markdown",
