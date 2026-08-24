@@ -93,6 +93,16 @@ def get_user_by_telegram_id(telegram_id: int) -> dict | None:
     return get_user_by_platform_id(telegram_id)
 
 
+def get_user_by_db_id(db_id: int) -> dict | None:
+    """کاربر را با شناسهٔ داخلی دیتابیس (users.id) پیدا می‌کند."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ? AND is_active = 1",
+            (db_id,),
+        ).fetchone()
+        return _row_to_dict(row)
+
+
 def update_user(platform_id: int, **fields) -> None:
     """به‌روزرسانی فیلدهای کاربر (full_name, phone, personnel_code, project_name, position).
     ورودی می‌تواند شناسهٔ تلگرام یا بله باشد."""

@@ -28,7 +28,7 @@ from db.models import (  # noqa: E402
     get_knowledge_entry_by_id,
     get_observation_attachment,
     get_observation_by_id,
-    get_user_by_platform_id,
+    get_user_by_db_id,
     list_knowledge_by_user,
     list_observation_attachments,
     list_observations_by_user,
@@ -72,7 +72,7 @@ def current_db_user(authorization: str = Header(default="")) -> dict:
     uid = resolve_session_token(token, WEBAPP_SECRET)
     if not uid:
         raise HTTPException(status_code=401, detail="نشست نامعتبر است.")
-    user = get_user_by_platform_id(uid)
+    user = get_user_by_db_id(uid)
     if not user:
         raise HTTPException(status_code=401, detail="کاربر یافت نشد.")
     return user
