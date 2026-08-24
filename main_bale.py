@@ -56,6 +56,7 @@ from bale import Bot, Update as BaleUpdate
 
 import config
 from db.init import init_db
+from bale_app.archive import get_archive_handlers
 from bale_app.framework import (
     CallbackQueryHandler,
     CommandHandler,
@@ -183,7 +184,7 @@ async def help_command(update, context) -> None:
         "گزینه‌ها:\n"
         "📓 ثبت مشاهده — ثبت سریع یک مشاهده صحرایی\n"
         "📝 ثبت دانش — ثبت دانش/تجربه با قالب DANA\n"
-        "🗂️ مشاهده‌های من — مرور مشاهدات ثبت‌شده\n"
+        "🗂️ بایگانی و جستجو — مرور و جستجوی مشاهدات و دانش‌ها\n"
         "👤 پروفایل من — مشاهده و ویرایش اطلاعات",
         parse_mode="Markdown",
     )
@@ -213,8 +214,10 @@ def build_dispatcher(bot: Bot) -> Dispatcher:
 
     # منوی اصلی
     dispatcher.add_standalone(CallbackQueryHandler(menu_main_handler, pattern=r"^menu:main$"))
+    for h in get_archive_handlers():
+        dispatcher.add_standalone(h)
     dispatcher.add_standalone(CommandHandler("help", help_command))
-    logger.info("  ✓ Standalone handlers ثبت شدند (menu:main / /help)")
+    logger.info("  ✓ Standalone handlers ثبت شدند (menu:main / /help / archive:*)")
 
     # fallback
     dispatcher.add_unknown_fallback(

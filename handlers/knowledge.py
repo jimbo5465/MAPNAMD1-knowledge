@@ -51,6 +51,8 @@ from db.models import (
     get_user_by_telegram_id,
     add_knowledge_entry,
     get_knowledge_entry_by_id,
+    list_knowledge_by_user,
+    search_knowledge_by_user,
     set_knowledge_fields,
     submit_knowledge_entry,
     set_knowledge_inactive,
@@ -107,7 +109,9 @@ async def _prompt_reply(target, context, text, reply_markup=None):
     KN_DATE,               # تاریخ ثبت
     KN_FINISH,             # ثبت نهایی + ساخت PDF/DOCX + ارسال
     KN_TYPE_CONFIRM,       # تأیید نوع پس از پیشنهاد AI (تعارض طبقه‌بندی)
-) = range(17)
+    KN_ARCHIVE_LIST,       # بایگانی دانش — لیست صفحه‌بندی‌شده/نتایج جستجو
+    KN_SEARCH_INPUT,       # دریافت عبارت جستجو در دانش‌ها
+) = range(19)
 
 _KEY_ENTRY_ID = "kn_entry_id"
 
@@ -2571,11 +2575,237 @@ async def _cancel_knowledge_conv(update: Update, context: ContextTypes.DEFAULT_T
 # ساخت ConversationHandler
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# بایگانی دانش — لیست، جستجو و جزئیات (فقط دانش‌های خود کاربر)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_KN_ARCH_PAGE_SIZE = 6
+
+_KN_TYPE_FA = {
+    "lesson": "📖 درس‌آموخته",
+    "suggestion": "💡 پیشنهاد بهبود",
+    "explicit": "📚 دانش صریح",
+}
+
+
+def _kn_entry_title(entry: dict) -> str:
+    """عنوان نمایشی یک رکورد دانش (از fields یا متن پیش‌نویس)."""
+    fields = entry.get("fields_json") or {}
+    title = ""
+    if isinstance(fields, dict):
+        title = str(fields.get("title") or "").strip()
+    if not title:
+        draft = (entry.get("draft_text") or "").strip()
+        raw = (entry.get("raw_description") or "").strip()
+        title = draft or raw or "بدون عنوان"
+    return " ".join(title.split())[:45]
+
+
+def _kn_status_fa(entry: dict) -> str:
+    """برچسب وضعیت رکورد."""
+    if entry.get("status") == "submitted":
+        return "✅"
+    return "✏️"
+
+
+def _kn_arch_items(entries: list[dict]) -> list[dict]:
+    """اقلام سبک لیست برای نگهداری در user_data (id/عنوان/وضعیت)."""
+    return [
+        {"id": e["id"], "title": _kn_entry_title(e), "submitted": e.get("status") == "submitted"}
+        for e in entries
+    ]
+
+
+def _kn_arch_list_keyboard(items: list[dict], page: int) -> InlineKeyboardMarkup:
+    total = len(items)
+    start = page * _KN_ARCH_PAGE_SIZE
+    chunk = items[start:start + _KN_ARCH_PAGE_SIZE]
+    rows: list[list[InlineKeyboardButton]] = []
+    for it in chunk:
+        label = f"{_kn_status_fa(it)} {it['title']}"[:64]
+        rows.append([InlineKeyboardButton(label, callback_data=f"kn:view:{it['id']}")])
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"kn:archpage:{page - 1}"))
+    if start + _KN_ARCH_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"kn:archpage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton("🔍 جستجو", callback_data="kn:search"),
+        InlineKeyboardButton("📋 همه", callback_data="kn:list"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _render_kn_arch_list(
+    items: list[dict], page: int, header: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    pages = max(1, (len(items) + _KN_ARCH_PAGE_SIZE - 1) // _KN_ARCH_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    text = f"{header}\n\n📚 تعداد: {len(items)} مورد | صفحه {page + 1} از {pages}"
+    if items:
+        text += "\n\nبرای مشاهدهٔ جزئیات، یکی را انتخاب کنید:"
+    return text, _kn_arch_list_keyboard(items, page)
+
+
+@require_registration
+async def kn_archive_list_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ورود به بایگانی دانش — نمایش همهٔ دانش‌های خود کاربر. (callback: kn:list)"""
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    entries = list_knowledge_by_user(user.id)
+    items = _kn_arch_items(entries)
+    context.user_data["kn_arch_items"] = items
+    if not items:
+        await query.edit_message_text(
+            "📭 هنوز دانشی ثبت نکرده‌اید.\n\n"
+            "با دکمهٔ «📝 ثبت دانش/تجربه سازمانی» اولین تجربه‌تان را مستند کنید!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📝 ثبت دانش", callback_data="kn:new")],
+                [InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")],
+            ]),
+        )
+        return ConversationHandler.END
+    context.user_data["kn_arch_page"] = 0
+    text, kb = _render_kn_arch_list(items, 0, "📋 *بایگانی دانش‌های شما*")
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    return KN_ARCHIVE_LIST
+
+
+@require_registration
+async def kn_archive_search_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ورود به جستجوی دانش‌ها — دریافت عبارت. (callback: kn:search)"""
+    query = update.callback_query
+    await query.answer()
+    await prompt_reply(
+        query.message, context,
+        "🔍 *جستجو در دانش‌های شما*\n\n"
+        "عبارت مورد نظر را بفرستید (بخشی از عنوان، متن، شمارهٔ دانش و...):",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ بازگشت به لیست", callback_data="kn:list")],
+        ]),
+    )
+    return KN_SEARCH_INPUT
+
+
+@require_registration
+async def kn_archive_search_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """دریافت عبارت جستجو و نمایش نتایج."""
+    keyword = _input_text(update, context)
+    if not keyword:
+        await prompt_reply(update.message, context, "❌ عبارت خالی است. دوباره بفرستید:")
+        return KN_SEARCH_INPUT
+    user = update.effective_user
+    entries = search_knowledge_by_user(user.id, keyword)
+    items = _kn_arch_items(entries)
+    context.user_data["kn_arch_items"] = items
+    context.user_data["kn_arch_page"] = 0
+    if not items:
+        await prompt_reply(
+            update.message, context,
+            f"🔍 نتیجه‌ای برای «{keyword[:50]}» پیدا نشد.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 جستجوی دیگر", callback_data="kn:search")],
+                [InlineKeyboardButton("📋 نمایش همه", callback_data="kn:list")],
+                [InlineKeyboardButton("🏠 منو", callback_data="menu:main")],
+            ]),
+        )
+        return KN_ARCHIVE_LIST
+    text, kb = _render_kn_arch_list(items, 0, f"🔍 *نتایج جستجو* برای «{keyword[:40]}»")
+    await prompt_reply(update.message, context, text, reply_markup=kb)
+    return KN_ARCHIVE_LIST
+
+
+@require_registration
+async def kn_archive_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """صفحه‌بندی لیست بایگانی. (callback: kn:archpage:N)"""
+    query = update.callback_query
+    await query.answer()
+    page = int((query.data or "").split(":")[2])
+    items = context.user_data.get("kn_arch_items") or []
+    context.user_data["kn_arch_page"] = page
+    text, kb = _render_kn_arch_list(items, page, "📋 *بایگانی دانش‌های شما*")
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    return KN_ARCHIVE_LIST
+
+
+@require_registration
+async def kn_archive_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    مشاهدهٔ جزئیات یک دانش. (callback: kn:view:<id>)
+    فقط مالکِ رکورد اجازهٔ دیدن دارد؛ همچنین لینک «🔗 مشاهده دانش»
+    در مشاهدات ارتقایافته را فعال می‌کند.
+    """
+    query = update.callback_query
+    await query.answer()
+    kid = int((query.data or "").split(":")[2])
+    user = update.effective_user
+    entry = get_knowledge_entry_by_id(kid)
+    profile = get_user_by_telegram_id(user.id)
+    if not entry or not profile or entry.get("reported_by") != profile["id"]:
+        await query.edit_message_text(
+            "⚠️ رکورد یافت نشد یا به شما تعلق ندارد.",
+            reply_markup=back_to_main_keyboard(),
+        )
+        return KN_ARCHIVE_LIST
+
+    status = "✅ ثبت‌شده" if entry.get("status") == "submitted" else "✏️ پیش‌نویس"
+    ktype = _KN_TYPE_FA.get(entry.get("knowledge_type"), "📚 دانش")
+    created = (entry.get("created_at") or "")[:10]
+    try:
+        import datetime as _dt
+        date_fa = jdatetime.date.fromgregorian(
+            date=_dt.date.fromisoformat(created)
+        ).strftime("%Y/%m/%d") if created else "—"
+    except ValueError:
+        date_fa = created or "—"
+
+    desc = (entry.get("draft_text") or entry.get("raw_description") or "").strip()
+    if len(desc) > 900:
+        desc = desc[:900] + "…"
+
+    org = entry.get("org_metadata_json") or {}
+    tags = org.get("hashtags") if isinstance(org, dict) else None
+    tag_line = " ".join("#" + str(t) for t in tags) if tags else "—"
+
+    tree_path = entry.get("tree_path_json") or []
+    tree_line = " ← ".join(str(p) for p in tree_path) if tree_path else "—"
+
+    photos = models.list_knowledge_photos(kid)
+    photo_line = f"{len(photos)} مورد" if photos else "—"
+    pdf_note = "\n📎 فایل PDF/Word این گزارش تولید شده است." if entry.get("pdf_path") else ""
+
+    kn_number = entry.get("kn_number") or "—"
+    text = (
+        f"📚 *جزئیات دانش*\n\n"
+        f"🆔 شماره: {kn_number}\n"
+        f"{ktype}\n"
+        f"{status}\n"
+        f"📅 تاریخ ثبت: {date_fa}\n"
+        f"🌳 طبقه‌بندی: {tree_line}\n"
+        f"#️⃣ هشتگ‌ها: {tag_line}\n"
+        f"🖼️ پیوست‌ها: {photo_line}{pdf_note}\n\n"
+        f"*متن:*\n{desc}"
+    )
+    rows = [[InlineKeyboardButton("◀️ بازگشت به لیست", callback_data="kn:list")]]
+    rows.append([InlineKeyboardButton("🏠 منو", callback_data="menu:main")])
+    await query.edit_message_text(
+        text[:4000], parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return KN_ARCHIVE_LIST
+
+
 def get_knowledge_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CallbackQueryHandler(kn_mode_entry, pattern=r"^kn:new$"),
             CallbackQueryHandler(kn_promote_mode, pattern=r"^kn:promote:(manual|interview)$"),
+            CallbackQueryHandler(kn_archive_list_entry, pattern=r"^kn:list$"),
+            CallbackQueryHandler(kn_archive_search_entry, pattern=r"^kn:search$"),
+            CallbackQueryHandler(kn_archive_view, pattern=r"^kn:view:\d+$"),
         ],
         states={
             KN_MODE_SELECT: [
@@ -2668,6 +2898,15 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_cal_nav, pattern=r"^kndate:view:\d+:\d+$"),
                 CallbackQueryHandler(kn_cal_none, pattern=r"^kndate:none$"),
                 CallbackQueryHandler(kn_cal_pick, pattern=r"^kndate:pick:\d+:\d+:\d+$"),
+            ],
+            KN_ARCHIVE_LIST: [
+                CallbackQueryHandler(kn_archive_page, pattern=r"^kn:archpage:\d+$"),
+                CallbackQueryHandler(kn_archive_view, pattern=r"^kn:view:\d+$"),
+                CallbackQueryHandler(kn_archive_search_entry, pattern=r"^kn:search$"),
+                CallbackQueryHandler(kn_archive_list_entry, pattern=r"^kn:list$"),
+            ],
+            KN_SEARCH_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, kn_archive_search_input),
             ],
         },
         fallbacks=[

@@ -61,6 +61,7 @@ from telegram.ext import (
 
 import config
 from db.init import init_db
+from handlers.archive import get_archive_handlers
 from handlers.knowledge import get_knowledge_conversation_handler
 from handlers.registration import get_registration_conversation_handler
 from handlers.observations import get_observations_conversation_handler
@@ -177,7 +178,7 @@ async def help_command(update: Update, context) -> None:
         "گزینه‌ها:\n"
         "📓 ثبت مشاهده — ثبت سریع یک مشاهده صحرایی\n"
         "📝 ثبت دانش — ثبت دانش/تجربه با قالب DANA\n"
-        "🗂️ مشاهده‌های من — مرور مشاهدات ثبت‌شده\n"
+        "🗂️ بایگانی و جستجو — مرور و جستجوی مشاهدات و دانش‌ها\n"
         "👤 پروفایل من — مشاهده و ویرایش اطلاعات",
         parse_mode="Markdown",
     )
@@ -239,10 +240,13 @@ def main() -> None:
     app.add_handler(get_knowledge_conversation_handler(), group=1)
     logger.info("  ✓ ConversationHandler ثبت دانش/تجربه ثبت شد")
 
-    # منوی اصلی
+    # منوی اصلی + زیرمنوی بایگانی و جستجو
     app.add_handler(CallbackQueryHandler(menu_main_handler, pattern=r"^menu:main$"), group=1)
+    for h in get_archive_handlers():
+        app.add_handler(h, group=1)
     app.add_handler(CommandHandler("help", help_command), group=1)
     logger.info("  ✓ CommandHandlers ثبت شدند (/start /cancel /help /menu)")
+    logger.info("  ✓ زیرمنوی بایگانی و جستجو ثبت شد (archive:*)")
 
     # fallback
     app.add_handler(

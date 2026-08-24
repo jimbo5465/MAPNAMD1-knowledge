@@ -405,6 +405,46 @@ def list_knowledge_entries(active_only: bool = True) -> list[dict]:
         return [_deserialize_knowledge(r) for r in rows]
 
 
+def list_knowledge_by_user(telegram_id: int, active_only: bool = True) -> list[dict]:
+    """تمام دانش‌های یک کاربر (جدیدترین اول). ورودی: شناسهٔ هر پلتفرم."""
+    user = get_user_by_platform_id(telegram_id)
+    if user is None:
+        return []
+    sql = "SELECT * FROM knowledge_entries WHERE reported_by = ?"
+    if active_only:
+        sql += " AND is_active = 1"
+    sql += " ORDER BY id DESC"
+    with get_connection() as conn:
+        rows = conn.execute(sql, (user["id"],)).fetchall()
+        return [_deserialize_knowledge(r) for r in rows]
+
+
+def search_knowledge_by_user(
+    telegram_id: int,
+    keyword: str,
+    limit: int = 30,
+) -> list[dict]:
+    """
+    جستجوی متنی در دانش‌های خود کاربر.
+    جستجو در: kn_number، عنوان/فیلدها (fields_json)، draft_text و raw_description.
+    ورودی شناسه: هر پلتفرم.
+    """
+    user = get_user_by_platform_id(telegram_id)
+    if user is None or not (keyword or "").strip():
+        return []
+    like = f"%{keyword.strip()}%"
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT * FROM knowledge_entries
+               WHERE reported_by = ? AND is_active = 1
+                 AND (kn_number LIKE ? OR fields_json LIKE ?
+                      OR draft_text LIKE ? OR raw_description LIKE ?)
+               ORDER BY id DESC LIMIT ?""",
+            (user["id"], like, like, like, like, limit),
+        ).fetchall()
+        return [_deserialize_knowledge(r) for r in rows]
+
+
 def add_knowledge_photo(knowledge_id: int, path: str) -> int:
     """عکسی به یک دانش اضافه می‌کند."""
     now = _now_str()

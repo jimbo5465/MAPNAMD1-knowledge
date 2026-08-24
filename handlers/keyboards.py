@@ -1,6 +1,6 @@
 """
 ماژول keyboards — سازنده‌های keyboard برای MAPNAMD1-knowledge.
-منوی اصلی: ثبت مشاهده، ثبت دانش، مشاهده‌های من، پروفایل من.
+منوی اصلی: ثبت مشاهده، ثبت دانش، بایگانی و جستجو، پروفایل من.
 """
 
 from __future__ import annotations
@@ -17,8 +17,7 @@ def main_menu_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton("📓 ثبت مشاهده", callback_data="obs:new")],
         [InlineKeyboardButton("📝 ثبت دانش/تجربه سازمانی", callback_data="kn:new")],
-        [InlineKeyboardButton("🗂️ مشاهده‌های من", callback_data="obs:list")],
-        [InlineKeyboardButton("🔍 جستجو در مشاهدات", callback_data="obs:search")],
+        [InlineKeyboardButton("🗂️ بایگانی و جستجو", callback_data="archive:open")],
         [InlineKeyboardButton("👤 پروفایل من", callback_data="profile:view")],
     ]
     return InlineKeyboardMarkup(buttons)
