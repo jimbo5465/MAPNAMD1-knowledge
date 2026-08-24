@@ -78,18 +78,50 @@ def _status_label(status: str) -> str:
     return labels.get(status, status)
 
 
-def _obs_list_keyboard(obs_list: list[dict]) -> InlineKeyboardMarkup:
+_OBS_PAGE_SIZE = 5
+
+_VOICE_TITLE_PREFIX = "📝 متن تشخیص"
+
+
+def _strip_voice_prefix(text: str | None) -> str:
+    """حذف پیشوند قدیمی «متن تشخیص‌داده‌شده از ویس شما:» از ابتدای متن."""
+    t = (text or "").lstrip()
+    if t.startswith(_VOICE_TITLE_PREFIX):
+        colon = t.find(":", len(_VOICE_TITLE_PREFIX))
+        if 0 <= colon <= 80:
+            t = t[colon + 1:]
+    return t.strip()
+
+
+def _obs_display_title(obs: dict) -> str:
+    """عنوان نمایشی مشاهده؛ برای رکوردهای بی‌عنوان، اولین سطر تمیزِ محتوا."""
+    title = (obs.get("title") or "").strip()
+    if not title:
+        content = _strip_voice_prefix(obs.get("content") or "")
+        title = content.splitlines()[0] if content else ""
+    return " ".join(title.split()) or "بدون عنوان"
+
+
+def _obs_list_keyboard(obs_list: list[dict], page: int = 0) -> InlineKeyboardMarkup:
+    """کیبورد لیست مشاهدات — ۵ آیتم در هر صفحه، بدون دکمهٔ ثبت جدید."""
+    total = len(obs_list)
+    start = page * _OBS_PAGE_SIZE
+    chunk = obs_list[start:start + _OBS_PAGE_SIZE]
     rows = []
-    for obs in obs_list[:10]:
-        title = obs.get("title") or (obs.get("content") or "")[:40]
-        snippet = (obs.get("content") or "")[:40]
-        label = f"#{obs['id']} — {title[:35]}"
+    for obs in chunk:
+        label = f"{obs['id']} — {_obs_display_title(obs)[:38]}"
         rows.append([
             InlineKeyboardButton(label, callback_data=f"obs:view:{obs['id']}")
         ])
-    rows.append([InlineKeyboardButton("➕ مشاهده جدید", callback_data="obs:new")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"obs:listpage:{page - 1}"))
+    if start + _OBS_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"obs:listpage:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton("🔍 جستجو", callback_data="obs:search")])
-    rows.append([InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")])
+    rows.append([InlineKeyboardButton("🏠 منو", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -736,25 +768,37 @@ async def obs_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return ConversationHandler.END
 
-    lines = [f"📂 *مشاهدات شما* ({len(obs_list)} مورد):\n"]
-    for obs in obs_list[:10]:
-        title = obs.get("title") or (obs.get("content") or "")[:40]
-        snippet = (obs.get("content") or "")[:50].replace("\n", " ")
-        att_count = len(list_observation_attachments(obs["id"]))
-        att_label = f" 📎{att_count}" if att_count else ""
-        # تاریخ
-        date_str = ""
-        if obs.get("obs_date"):
-            try:
-                date_str = f" | {gregorian_to_jalali_display(obs['obs_date'])}"
-            except Exception:
-                pass
-        lines.append(f"• #{obs['id']} — *{title[:35]}*{date_str}\n   {_status_label(obs['status'])}{att_label}")
-
+    context.user_data["obs_list_source"] = "all"
     await query.edit_message_text(
-        "\n".join(lines),
+        f"📂 *مشاهدات شما* ({len(obs_list)} مورد)",
         parse_mode="Markdown",
-        reply_markup=_obs_list_keyboard(obs_list),
+        reply_markup=_obs_list_keyboard(obs_list, 0),
+    )
+    return ConversationHandler.END
+
+
+@require_registration
+async def obs_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """صفحه‌بندی لیست مشاهدات. (callback: obs:listpage:N)"""
+    query = update.callback_query
+    await query.answer()
+    page = int((query.data or "").split(":")[2])
+    user = update.effective_user
+    if not user:
+        return ConversationHandler.END
+    if context.user_data.get("obs_list_source") == "search":
+        obs_list = context.user_data.get("obs_search_results") or []
+        header = "🔍 *نتایج جستجو*"
+    else:
+        obs_list = list_observations_by_user(user.id)
+        header = f"📂 *مشاهدات شما* ({len(obs_list)} مورد)"
+    if not obs_list:
+        return ConversationHandler.END
+    pages = max(1, (len(obs_list) + _OBS_PAGE_SIZE - 1) // _OBS_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    await query.edit_message_text(
+        header, parse_mode="Markdown",
+        reply_markup=_obs_list_keyboard(obs_list, page),
     )
     return ConversationHandler.END
 
@@ -1006,23 +1050,12 @@ async def obs_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return ConversationHandler.END
 
-    lines = [f"🔍 *نتایج جستجو* ({len(results)} مورد):\n"]
-    for obs in results[:10]:
-        title = obs.get("title") or (obs.get("content") or "")[:40]
-        snippet = (obs.get("content") or "")[:50].replace("\n", " ")
-        date_str = ""
-        if obs.get("obs_date"):
-            try:
-                date_str = f" | {gregorian_to_jalali_display(obs['obs_date'])}"
-            except Exception:
-                pass
-        lines.append(f"• #{obs['id']} — *{title[:35]}*{date_str}")
-
-    lines.append("\nروی گزینهٔ زیر کلیک کنید:")
+    context.user_data["obs_search_results"] = results
+    context.user_data["obs_list_source"] = "search"
     await update.message.reply_text(
-        "\n".join(lines),
+        f"🔍 *نتایج جستجو* ({len(results)} مورد)",
         parse_mode="Markdown",
-        reply_markup=_obs_list_keyboard(results[:10]),
+        reply_markup=_obs_list_keyboard(results, 0),
     )
     return ConversationHandler.END
 
@@ -1120,6 +1153,7 @@ def get_observations_conversation_handler() -> ConversationHandler:
         entry_points=[
             CallbackQueryHandler(obs_new_start, pattern=r"^obs:new$"),
             CallbackQueryHandler(obs_list_start, pattern=r"^obs:list$"),
+            CallbackQueryHandler(obs_list_page, pattern=r"^obs:listpage:\d+$"),
             CallbackQueryHandler(obs_view, pattern=r"^obs:view:\d+$"),
             CallbackQueryHandler(obs_extend_start, pattern=r"^obs:extend:\d+$"),
             CallbackQueryHandler(obs_promote, pattern=r"^obs:promote:\d+$"),
