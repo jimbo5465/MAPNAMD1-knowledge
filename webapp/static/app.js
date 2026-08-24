@@ -155,10 +155,20 @@ var views = ["kn-list", "kn-detail", "obs-list", "obs-detail", "me"];
 var titles = { kn: "📚 دانش‌های من", obs: "📓 مشاهدات من", me: "👤 پروفایل من" };
 
 function showView(name, titleOverride) {
-    views.forEach(function (v) { $(v + "-view").classList.add("hidden"); });
-    $("back-btn").classList.toggle("hidden", name.indexOf("detail") === -1);
-    $(name + "-view").classList.remove("hidden");
-    $("page-title").textContent = titleOverride !== undefined ? titleOverride : (titles[currentTab] || "");
+    dbg("showView:" + name);
+    views.forEach(function (v) {
+        var el = $(v + "-view");
+        if (!el) { dbg("showView:MISSING #" + v + "-view"); return; }
+        el.classList.add("hidden");
+    });
+    var bb = $("back-btn");
+    if (!bb) dbg("showView:MISSING #back-btn");
+    else bb.classList.toggle("hidden", name.indexOf("detail") === -1);
+    var target = $(name + "-view");
+    if (!target) { dbg("showView:MISSING #" + name); return; }
+    target.classList.remove("hidden");
+    var pt = $("page-title");
+    if (pt) pt.textContent = titleOverride !== undefined ? titleOverride : (titles[currentTab] || "");
 }
 
 $("back-btn").addEventListener("click", function () {
@@ -182,7 +192,7 @@ document.querySelectorAll(".tabbar button").forEach(function (btn) {
                 setStatusVisible(true);
                 renderMe();
             } catch (e) {
-                dbg("me-tab-ERR: " + e.message);
+                dbg("me-tab-ERR: " + e.message + " | stack: " + String(e.stack || "").substring(0, 400));
                 setStatusVisible(false);
                 $("me-view").innerHTML = '<div class="empty">⚠️ ' + esc(e.message) + '</div>';
             }
