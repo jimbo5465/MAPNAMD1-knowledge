@@ -201,7 +201,7 @@ document.querySelectorAll(".tabbar button").forEach(function (btn) {
         else if (currentTab === "obs") { showView("obs-list"); loadObs(0); }
         else {
             try {
-                showView("me-view", titles.me);
+                showView("me", titles.me);
                 setStatusVisible(true);
                 renderMe();
             } catch (e) {
