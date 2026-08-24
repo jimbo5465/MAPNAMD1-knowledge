@@ -35,18 +35,44 @@ function faDate(s) {
 
 // ── ورود ──────────────────────────────────────────────────────────────────────
 
-function getInitData() {
+function getInitDataFromUrl() {
     const p = new URLSearchParams(location.search);
-    return p.get("tgWebAppData") || "";
+    let d = p.get("tgWebAppData");
+    if (!d && location.hash) {
+        const h = new URLSearchParams(location.hash.slice(1));
+        d = h.get("tgWebAppData");
+    }
+    return d || "";
+}
+
+/**
+ * initData: تلگرام آن را در URL می‌گذارد؛ بله فقط از طریق SDK
+ * (window.Bale.WebApp.initData) تحویل می‌دهد — تا ۶ ثانیه منتظر می‌مانیم.
+ */
+function getInitData() {
+    return new Promise((resolve) => {
+        const immediate = getInitDataFromUrl();
+        if (immediate) { resolve(immediate); return; }
+        const t0 = Date.now();
+        const timer = setInterval(() => {
+            try {
+                const d = window.Bale?.WebApp?.initData;
+                if (d) { clearInterval(timer); resolve(d); return; }
+            } catch (_) { /* SDK هنوز آماده نیست */ }
+            if (Date.now() - t0 > 6000) { clearInterval(timer); resolve(""); }
+        }, 150);
+    });
 }
 
 function detectPlatform() {
+    if (window.Bale?.WebApp) return "bale";
+    if (window.Telegram?.WebApp) return "telegram";
     const ua = navigator.userAgent || "";
     return /Telegram/i.test(ua) ? "telegram" : "bale";
 }
 
 async function auth() {
-    const initData = getInitData();
+    const initData = await getInitData();
     if (!initData) throw new Error("این صفحه باید از داخل پیام‌رسان باز شود.");
     const res = await fetch(API + "/auth", {
         method: "POST",
