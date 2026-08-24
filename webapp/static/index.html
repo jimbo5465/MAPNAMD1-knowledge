@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ربات دانش سازمانی</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loading-screen" class="screen-center">
+    <div class="spinner"></div>
+    <p id="loading-msg">در حال ورود...</p>
+</div>
+
+<div id="error-screen" class="screen-center hidden">
+    <div class="icon">⚠️</div>
+    <h2 id="error-title">خطا</h2>
+    <p id="error-detail"></p>
+</div>
+
+<div id="app" class="hidden">
+    <header>
+        <button id="back-btn" class="back-btn hidden">→ بازگشت</button>
+        <span id="page-title">📚 دانش‌های من</span>
+    </header>
+
+    <!-- ═══ لیست دانش‌ها ═══ -->
+    <main id="kn-list-view" class="view">
+        <div class="search-bar">
+            <input type="search" id="kn-search-input" placeholder="🔍 جستجو در دانش‌ها...">
+        </div>
+        <div id="kn-list" class="cards"></div>
+        <div class="pager">
+            <button id="kn-prev">◀️ قبلی</button>
+            <span id="kn-page-info"></span>
+            <button id="kn-next">بعدی ▶️</button>
+        </div>
+    </main>
+
+    <!-- ═══ جزئیات دانش ═══ -->
+    <main id="kn-detail-view" class="view hidden"></main>
+
+    <!-- ═══ لیست مشاهدات ═══ -->
+    <main id="obs-list-view" class="view hidden">
+        <div class="search-bar">
+            <input type="search" id="obs-search-input" placeholder="🔍 جستجو در مشاهدات...">
+        </div>
+        <div id="obs-list" class="cards"></div>
+        <div class="pager">
+            <button id="obs-prev">◀️ قبلی</button>
+            <span id="obs-page-info"></span>
+            <button id="obs-next">بعدی ▶️</button>
+        </div>
+    </main>
+
+    <!-- ═══ جزئیات مشاهده ═══ -->
+    <main id="obs-detail-view" class="view hidden"></main>
+
+    <!-- ═══ پروفایل ═══ -->
+    <main id="me-view" class="view hidden"></main>
+
+    <nav class="tabbar">
+        <button data-tab="kn" class="active">📚<span>دانش‌ها</span></button>
+        <button data-tab="obs">📓<span>مشاهدات</span></button>
+        <button data-tab="me">👤<span>من</span></button>
+    </nav>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

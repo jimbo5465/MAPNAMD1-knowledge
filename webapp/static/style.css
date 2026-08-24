@@ -1,0 +1,171 @@
+/* ربات دانش سازمانی — مینی‌اپ (تم خودکار روشن/تیره) */
+
+:root {
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --text: #0f172a;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --border: #e2e8f0;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #60a5fa;
+        --border: #334155;
+    }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: Tahoma, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    direction: rtl;
+}
+
+.hidden { display: none !important; }
+
+.screen-center {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    text-align: center;
+}
+.screen-center .icon { font-size: 52px; }
+.screen-center p { color: var(--muted); line-height: 2; }
+
+.spinner {
+    width: 42px; height: 42px;
+    border: 4px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── چیدمان اصلی ── */
+#app { max-width: 560px; margin: 0 auto; min-height: 100vh; padding-bottom: 76px; }
+
+header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 13px 16px;
+    font-weight: bold;
+    display: flex; align-items: center; gap: 10px;
+}
+.back-btn {
+    background: none; border: none; color: var(--accent);
+    font-family: inherit; font-size: 14px; cursor: pointer; padding: 2px 6px;
+}
+
+.view { padding: 12px; }
+
+.search-bar { margin-bottom: 12px; }
+.search-bar input {
+    width: 100%; padding: 11px 14px;
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--card); color: var(--text);
+    font-family: inherit; font-size: 14px;
+    outline: none;
+}
+.search-bar input:focus { border-color: var(--accent); }
+
+/* ── کارت‌ها ── */
+.cards { display: flex; flex-direction: column; gap: 10px; }
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 13px 15px;
+    cursor: pointer;
+    transition: transform .08s;
+}
+.card:active { transform: scale(.98); }
+.card h3 { font-size: 14.5px; margin-bottom: 7px; line-height: 1.8; }
+.card .meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+    font-size: 11.5px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 3px 9px;
+    border-radius: 20px;
+}
+.chip.ok   { color: #16a34a; border-color: #16a34a55; }
+.chip.draft{ color: #d97706; border-color: #d9770655; }
+
+.empty { text-align: center; color: var(--muted); padding: 40px 12px; line-height: 2.2; }
+
+/* ── صفحه‌بندی ── */
+.pager {
+    display: flex; align-items: center; justify-content: center;
+    gap: 14px; margin-top: 16px;
+}
+.pager button {
+    background: var(--card); color: var(--accent);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer;
+}
+.pager button:disabled { opacity: .35; cursor: default; }
+.pager span { color: var(--muted); font-size: 13px; }
+
+/* ── جزئیات ── */
+.detail-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 17px;
+    line-height: 2.1;
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.detail-card .row { display: flex; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.detail-card .row b { color: var(--muted); min-width: 78px; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 13px 0; }
+.desc-title { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+.att-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.att-chip {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 22px; padding: 7px 14px; font-size: 12.5px;
+    color: var(--accent); cursor: pointer; text-decoration: none;
+}
+.att-img { max-width: 100%; border-radius: 12px; margin-top: 10px; display: block; }
+
+/* ── پروفایل ── */
+.profile-rows { background: var(--card); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+.profile-rows .prow {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px;
+}
+.profile-rows .prow:last-child { border-bottom: none; }
+.profile-rows .prow span:first-child { color: var(--muted); }
+
+/* ── نوار پایین ── */
+.tabbar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+    max-width: 560px; margin: 0 auto;
+    display: flex;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+}
+.tabbar button {
+    flex: 1; background: none; border: none;
+    color: var(--muted); font-family: inherit;
+    padding: 9px 0 11px; cursor: pointer; font-size: 19px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.tabbar button span { font-size: 11px; }
+.tabbar button.active { color: var(--accent); }
