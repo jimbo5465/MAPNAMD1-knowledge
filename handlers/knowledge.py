@@ -1670,9 +1670,14 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
         )
         return KN_INTERVIEW_LOOP
 
-    except Exception:
+    except Exception as exc:
         logger.exception("خطا در kn_interview_loop_text")
-        await update.message.reply_text("❌ خطایی رخ داد.")
+        await update.message.reply_text(
+            "🤖 هوش مصنوعی موقتاً پاسخ نمی‌دهد (احتمالاً قطعی سرویس).\n"
+            "گزینه‌ها: دوباره همین پاسخ را بفرستید، یا «✓ پایان مصاحبه» را بزنید "
+            "تا فیلدهای باقی‌مانده دستی از شما پرسیده شود.\n"
+            f"(جزئیات فنی: {type(exc).__name__})"
+        )
         return KN_INTERVIEW_LOOP
 
 
@@ -1713,13 +1718,22 @@ async def _final_assemble_and_preview(
         fields = context.user_data.get("kn_fields") or {}
 
         # پاس polish (narrative + hashtags + project/contractor از متن)
-        polish = await polish_dana_draft(
-            knowledge_type,
-            fields,
-            raw_description=context.user_data.get("kn_description"),
-            project_name=None,
-            contractor_name=None,
-        )
+        # شکست AI نباید کل ثبت را زمین بزند — بدون narrative هم گزارش ساخته می‌شود.
+        polish: dict = {}
+        try:
+            polish = await polish_dana_draft(
+                knowledge_type,
+                fields,
+                raw_description=context.user_data.get("kn_description"),
+                project_name=None,
+                contractor_name=None,
+            )
+        except Exception:
+            logger.warning("polish AI ناموفق — ادامه بدون بازنویسی روایت")
+            await prompt_reply(
+                msg, context,
+                "⚠️ هوش مصنوعی موقتاً در دسترس نیست؛ فرم با همان متن شما ساخته می‌شود.",
+            )
 
         # ساخت گزارش با narrative AI در صورت موفقیت
         narrative = polish.get("narrative")
