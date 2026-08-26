@@ -570,11 +570,16 @@ async def obs_voice_received(update, context) -> int:
     context.user_data["obs_voice_text"] = text
 
     await delete_tracked(context)
+    # دکمهٔ «📋 کپی متن» بله تا ~۲۵۶ کاراکتر پشتیبانی می‌کند — یک لمس، کپی دقیق
+    kb_rows = _voice_confirm_keyboard(None).keyboard
+    if len(text) <= 250:
+        kb_rows.insert(
+            0, [InlineKeyboardButton("📋 کپی متن", copy_text=text)]
+        )
     sent = await update.message.reply_text(
         f"📝 *متن تشخیص‌داده‌شده از ویس شما:*\n\n{text}\n\n"
         "آیا این متن درست است؟ می‌توانید اصلاح کنید.",
-        parse_mode="Markdown",
-        reply_markup=_voice_confirm_keyboard(None),
+        reply_markup=InlineKeyboardMarkup(kb_rows),
     )
     track_prompt(context, sent)
     return OBS_CONFIRM_VOICE
@@ -593,9 +598,23 @@ async def obs_confirm_voice(update, context) -> int:
 
 @require_registration
 async def obs_edit_voice_start(update, context) -> int:
+    """
+    ورود به حالت اصلاح — پیام حاوی متن ترنسکرایب دست نخورده می‌ماند
+    (کاربر آن را کپی/ویرایش می‌کند) و فقط راهنما به‌صورت پیام جدید ارسال می‌شود.
+    """
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("✏️ متن اصلاح‌شده را بنویسید:")
+    text = context.user_data.get("obs_voice_text", "")
+    if not text:
+        await query.edit_message_text("❌ متنی یافت نشد. دوباره ویس بفرستید.")
+        return OBS_CONTENT
+    # متن خام را دوباره می‌فرستیم تا کاربر مطمئن باشد چه چیزی را ویرایش می‌کند
+    sent = await update.effective_message.reply_text(text)
+    track_prompt(context, sent)
+    sent2 = await update.effective_message.reply_text(
+        "✏️ متن بالا (یا پیام قبلی) را کپی، ویرایش کن و نتیجه را همین‌جا بفرست:"
+    )
+    track_prompt(context, sent2)
     return OBS_CONFIRM_VOICE
 
 

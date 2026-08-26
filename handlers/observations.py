@@ -526,9 +526,11 @@ async def obs_voice_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["obs_voice_text"] = text
 
     await delete_tracked(context)
+    # بلوک Mono — در تلگرام با لمس روی متن، کپی می‌شود
     sent = await update.message.reply_text(
-        f"📝 *متن تشخیص‌داده‌شده از ویس شما:*\n\n_{text}_\n\n"
-        "آیا این متن درست است؟ می‌توانید اصلاح کنید.",
+        f"📝 *متن تشخیص‌داده‌شده از ویس شما:*\n\n"
+        f"```\n{text}\n```\n\n"
+        "آیا این متن درست است؟ (برای کپی، روی متن لمس کن)",
         parse_mode="Markdown",
         reply_markup=_voice_confirm_keyboard(None),
     )
@@ -549,9 +551,28 @@ async def obs_confirm_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @require_registration
 async def obs_edit_voice_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    ورود به حالت اصلاح — پیام Mono حاوی متن دست نخورده می‌ماند
+    (قابل لمس‌کپی) و فقط راهنما به‌صورت پیام جدید ارسال می‌شود.
+    """
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("✏️ متن اصلاح‌شده را بنویسید:")
+    text = context.user_data.get("obs_voice_text", "")
+    if not text:
+        await query.edit_message_text("❌ متنی یافت نشد. دوباره ویس بفرستید.")
+        return OBS_CONTENT
+    # متن خام را دوباره می‌فرستیم تا کاربر مطمئن باشد چه چیزی را ویرایش می‌کند
+    sent = await context.bot.send_message(
+        query.message.chat_id,
+        f"```\n{text}\n```",
+        parse_mode="Markdown",
+    )
+    track_prompt(context, sent)
+    sent2 = await context.bot.send_message(
+        query.message.chat_id,
+        "✏️ متن بالا (لمس → کپی) را ویرایش کن و نتیجه را همین‌جا بفرست:",
+    )
+    track_prompt(context, sent2)
     return OBS_CONFIRM_VOICE
 
 

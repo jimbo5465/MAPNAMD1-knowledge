@@ -117,19 +117,34 @@ class _BaleWebAppButton(bale.InlineKeyboardButton):
         return {"text": self.text, "web_app": {"url": self._webapp_url}}
 
 
+class _BaleCopyTextButton(bale.InlineKeyboardButton):
+    """دکمهٔ کپی متن (تا ~۲۵۶ کاراکتر) — مشابه web_app با تزریق JSON."""
+
+    def __init__(self, text: str, copy_text: str):
+        super().__init__(text=text)
+        self._copy_text = copy_text
+
+    def to_dict(self) -> dict:
+        return {"text": self.text, "copy_text": {"text": self._copy_text}}
+
+
 class InlineKeyboardButton:
     """معادل telegram.InlineKeyboardButton."""
 
     def __init__(self, text: str, callback_data: str | None = None,
-                 url: str | None = None, web_app: str | None = None) -> None:
+                 url: str | None = None, web_app: str | None = None,
+                 copy_text: str | None = None) -> None:
         self.text = text
         self.callback_data = callback_data
         self.url = url
         self.web_app = web_app
+        self.copy_text = copy_text
 
     def to_bale(self) -> bale.InlineKeyboardButton:
         if self.web_app:
             return _BaleWebAppButton(text=self.text, web_app_url=self.web_app)
+        if self.copy_text:
+            return _BaleCopyTextButton(text=self.text, copy_text=self.copy_text)
         return _BaleInlineButton(
             text=self.text, callback_data=self.callback_data, url=self.url,
         )
