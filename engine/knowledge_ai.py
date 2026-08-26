@@ -342,47 +342,75 @@ async def _call_llm_messages(
     max_tokens: int = 4096,
 ) -> str:
     """
-    فراخوانی chat completions با لیست پیام کامل (system + history + user).
-    برای مصاحبه و پاس‌های چندمرحلهای استفاده میشود.
+    فراخوانی chat completions با زنجیرهٔ پروایدرها.
 
-    مدل‌های رایگان گاهی 5xx/timeout می‌دهند — تا ۴ تلاش با مکث کوتاه تکرار می‌شود.
+    ترتیب: پروایدر اصلی (سه متغیر config) سپس KNOWLEDGE_AI_PROVIDERS.
+    هر پروایدر تا چند تلاش (۴ اگر تنها، ۲ اگر fallback دارد) امتحان می‌شود؛
+    خطاهای 4xx (غیر از 429) قطعی‌اند و فوری رد می‌شوند. اگر همه شکست بخورند
+    آخرین استثنا بالا پرتاب می‌شود.
     """
-    url = f"{config.KNOWLEDGE_AI_BASE_URL.rstrip('/')}/chat/completions"
-    payload = {
-        "model": config.KNOWLEDGE_AI_MODEL,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    headers = {"Authorization": f"Bearer {config.KNOWLEDGE_AI_API_KEY}"}
+    providers: list[dict] = []
+    if config.KNOWLEDGE_AI_API_KEY and config.KNOWLEDGE_AI_MODEL:
+        providers.append({
+            "base_url": config.KNOWLEDGE_AI_BASE_URL,
+            "api_key": config.KNOWLEDGE_AI_API_KEY,
+            "model": config.KNOWLEDGE_AI_MODEL,
+        })
+    providers.extend(config.KNOWLEDGE_AI_PROVIDERS)
+
+    if not providers:
+        raise RuntimeError("هیچ پروایدر AI پیکربندی نشده است")
+
+    attempts_per_provider = 4 if len(providers) == 1 else 2
 
     last_exc: Exception | None = None
-    for attempt in range(1, 5):
-        try:
-            async with httpx.AsyncClient(timeout=config.KNOWLEDGE_AI_TIMEOUT) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
+    for idx, prov in enumerate(providers, start=1):
+        url = f"{prov['base_url'].rstrip('/')}/chat/completions"
+        payload = {
+            "model": prov["model"],
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        headers = {"Authorization": f"Bearer {prov['api_key']}"}
+
+        for attempt in range(1, attempts_per_provider + 1):
             try:
-                return data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError, TypeError) as exc:
-                raise RuntimeError(f"پاسخ LLM فرمت غیرمنتظره‌ای دارد: {exc}") from exc
-        except httpx.HTTPStatusError as exc:
-            # 4xx غیر از 429 یعنی خطای درخواست — تکرار بی‌فایده است
-            status = exc.response.status_code
-            if 400 <= status < 500 and status != 429:
-                raise
-            last_exc = exc
-            logger.warning(
-                "LLM %s (attempt %d/4) — وضعیت %s", url, attempt, status,
-            )
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            last_exc = exc
-            logger.warning("LLM شبکه/timeout (attempt %d/4): %s", attempt, exc)
+                async with httpx.AsyncClient(timeout=config.KNOWLEDGE_AI_TIMEOUT) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                try:
+                    return data["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise RuntimeError(f"پاسخ LLM فرمت غیرمنتظره‌ای دارد: {exc}") from exc
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if 400 <= status < 500 and status != 429:
+                    logger.warning(
+                        "LLM provider %d مدل=%s → %s (خطای قطعی، پروایدر بعدی)",
+                        idx, prov["model"], status,
+                    )
+                    last_exc = exc
+                    break
+                last_exc = exc
+                logger.warning(
+                    "LLM provider %d مدل=%s وضعیت=%s (attempt %d/%d)",
+                    idx, prov["model"], status, attempt, attempts_per_provider,
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "LLM provider %d شبکه/timeout (attempt %d/%d): %s",
+                    idx, attempt, attempts_per_provider, exc,
+                )
 
-        await asyncio.sleep(2 * attempt)
+            await asyncio.sleep(2 * attempt)
 
-    raise last_exc if last_exc else RuntimeError("LLM ناموفق")
+        if idx < len(providers):
+            logger.warning("پروایدر %d شکست خورد — رفتن به پروایدر بعدی", idx)
+
+    raise last_exc if last_exc else RuntimeError("همهٔ پروایدرهای AI ناموفق بودند")
 
 
 async def _call_llm(system: str, user_text: str) -> str:

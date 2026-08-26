@@ -57,6 +57,28 @@ KNOWLEDGE_AI_MODEL: str = os.environ.get("KNOWLEDGE_AI_MODEL", "")
 # حداکثر زمان انتظار برای پاسخ مدل (ثانیه)
 KNOWLEDGE_AI_TIMEOUT: float = float(os.environ.get("KNOWLEDGE_AI_TIMEOUT", "60"))
 
+# ─── پروایدرهای پشتیبان (fallback chain) ─────────────────────────────────────
+# فرمت متغیر محیطی KNOWLEDGE_AI_PROVIDERS:
+#   url|key|model;url|key|model;...
+# پروایدر اصلی از سه متغیر بالا ساخته می‌شود و این‌ها بعد از آن، به ترتیب امتحان
+# می‌شوند. مثال OpenRouter:
+#   https://openrouter.ai/api/v1|sk-or-v1-...|deepseek/deepseek-chat-v3.1:free
+
+def _parse_ai_providers(raw: str) -> list[dict]:
+    providers: list[dict] = []
+    for chunk in filter(None, (c.strip() for c in raw.split(";"))):
+        parts = [p.strip() for p in chunk.split("|")]
+        if len(parts) == 3 and all(parts):
+            providers.append(
+                {"base_url": parts[0], "api_key": parts[1], "model": parts[2]}
+            )
+    return providers
+
+
+KNOWLEDGE_AI_PROVIDERS: list[dict] = _parse_ai_providers(
+    os.environ.get("KNOWLEDGE_AI_PROVIDERS", "")
+)
+
 # ─── تبدیل گفتار به متن (STT) — Groq Whisper ─────────────────────────────────
 # برای ثبت دانش/مشاهده: کاربر می‌تواند به‌جای تایپ، ویس بفرستد و ربات با
 # whisper-large-v3-turbo روی Groq آن را به متن فارسی تبدیل می‌کند.
