@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import bale
+
+logger = logging.getLogger(__name__)
 from bale import (
     Bot,
     InlineKeyboardButton as _BaleInlineButton,
@@ -345,12 +348,22 @@ class _Cbq:
     async def edit_message_text(self, text: str, parse_mode: str | None = None,
                                 reply_markup=None, **_ignored) -> None:
         payload = strip_markdown(text)
+        markup = convert_markup(reply_markup)
         if not self.message:
             raise RuntimeError("پیام دکمه برای ویرایش یافت نشد")
-        await self._bot.edit_message(
-            self.message.chat_id, self.message.message_id, payload,
-            components=convert_markup(reply_markup),
-        )
+        try:
+            await self._bot.edit_message(
+                self.message.chat_id, self.message.message_id, payload,
+                components=markup,
+            )
+        except Exception as exc:
+            # پیام ممکن است حذف شده باشد (مثلاً پاکسازی پرامپت قدیمی) —
+            # به‌جای خطا، همان محتوا به‌صورت پیام تازه ارسال می‌شود.
+            logger.warning("edit_message ناموفق (%s) — fallback به پیام جدید", exc)
+            try:
+                await self.message.reply_text(payload, reply_markup=reply_markup)
+            except Exception:
+                logger.exception("fallback ارسال پیام جدید نیز ناموفق بود")
 
 
 class _Update:
