@@ -378,7 +378,7 @@ def _interview_continue_keyboard() -> InlineKeyboardMarkup:
 
 
 def _org_meta_keyboard(knowledge_type: str, current: dict) -> InlineKeyboardMarkup:
-    """منوی تنظیمات سازمانی — هر ردیف یک مورد، یک دکمهٔ اقدام."""
+    """منوی تنظیمات سازمانی — مطابق فیلدهای فرم رسمی دانا برای هر نوع."""
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(
             f"🌳 درخت دانش: {current.get('tree_display', 'انتخاب‌نشده')}",
@@ -392,10 +392,14 @@ def _org_meta_keyboard(knowledge_type: str, current: dict) -> InlineKeyboardMark
                 callback_data="kn_org:committee",
             )
         ])
+        # «بذر پیشنهاد» طبق فرم دانا خالی میماند — پرسیده نمیشود
+    if knowledge_type in ("lesson", "explicit"):
+        # پروژه: درسآموخته ⭐ الزامی، دانش صریح اختیاری؛ در فرم پیشنهاد نیست
+        star = "⭐" if knowledge_type == "lesson" else ""
         rows.append([
             InlineKeyboardButton(
-                f"💡 بذر پیشنهاد: {current.get('seed_display', 'خالی')}",
-                callback_data="kn_org:seed",
+                f"🏗 پروژه{star}: {current.get('project_display', 'خالی')}",
+                callback_data="kn_org:project",
             )
         ])
     rows.append([
@@ -408,7 +412,7 @@ def _org_meta_keyboard(knowledge_type: str, current: dict) -> InlineKeyboardMark
             callback_data="kn_org:hashtags",
         ),
     ])
-    if knowledge_type == "explicit":
+    if knowledge_type in ("lesson", "explicit"):
         rows.append([
             InlineKeyboardButton(
                 f"🏢 محدوده سازمانی: {current.get('scope_display', 'خالی')}",
@@ -1195,6 +1199,9 @@ async def kn_photos_done(update, context) -> int:
     """callback_data: kn_photos_done — پایان دریافت عکس."""
     try:
         await update.callback_query.answer()
+        # اگر در فاز پیش‌نمایش عکس اضافه شده، مستقیم به پیش‌نمایش برگرد
+        if context.user_data.get("kn_report"):
+            return await _save_and_preview(update.callback_query.message, context)
         await update.callback_query.edit_message_text(
             f"🗓️ تاریخ ثبت را وارد کنید (فرمت {jdatetime.date.today().strftime('%Y/%m/%d')} سال/ماه/روز).\n"
             "برای امروز دکمهٔ زیر را بزنید:",
@@ -1204,6 +1211,21 @@ async def kn_photos_done(update, context) -> int:
     except Exception:
         logger.exception("خطا در kn_photos_done")
         return ConversationHandler.END
+
+
+async def _go_to_org_menu(update, context) -> int:
+    """پس از تعیین تاریخ: ساخت رکورد (در صورت نبود) و ورود به تنظیمات سازمانی."""
+    chat_id = update.effective_chat.id
+    user = get_user_by_telegram_id(chat_id) if chat_id else None
+    if user is None:
+        await _prompt_reply(
+            getattr(update, "message", None) or (update.callback_query.message if update.callback_query else None),
+            context,
+            "⛔ حساب شما ثبت نشده است. لطفاً /start بزنید.",
+        )
+        return ConversationHandler.END
+    _ensure_knowledge_entry(context, chat_id, user)
+    return await _show_org_menu(update, context)
 
 
 async def kn_date(update, context) -> int:
@@ -1217,15 +1239,14 @@ async def kn_date(update, context) -> int:
         return KN_DATE
     normalized = value.replace("-", "/")
     context.user_data["kn_date"] = normalized
-    return await _save_and_preview(update.message, context)
+    return await _go_to_org_menu(update, context)
 
 
 async def kn_date_today(update, context) -> int:
     """callback_data: kn_today"""
     await update.callback_query.answer()
     context.user_data["kn_date"] = jdatetime.date.today().strftime("%Y/%m/%d")
-    msg = update.callback_query.message
-    return await _save_and_preview(msg, context)
+    return await _go_to_org_menu(update, context)
 
 
 # ── تقویم جلالی ──
@@ -1279,14 +1300,86 @@ async def kn_cal_pick(update, context) -> int:
         return KN_DATE
     year, month, day = parsed
     context.user_data["kn_date"] = f"{year}/{month:02d}/{day:02d}"
-    msg = update.callback_query.message
-    return await _save_and_preview(msg, context)
+    return await _go_to_org_menu(update, context)
+
+
+def _ensure_knowledge_entry(context, chat_id: int | None, user: dict | None = None) -> int:
+    """رکورد draft را در صورت نبود میسازد و id آن را برمیگرداند."""
+    kid = context.user_data.get(_KEY_ENTRY_ID)
+    if kid:
+        return kid
+    user_row = user or (get_user_by_telegram_id(chat_id) if chat_id else None)
+    kid = models.add_knowledge_entry(
+        telegram_id=(user_row or {}).get("telegram_id", chat_id or 0),
+        knowledge_type=context.user_data.get("kn_type"),
+        reporter_name=context.user_data.get("kn_reporter_name") or "—",
+        reporter_title=context.user_data.get("kn_reporter_title") or None,
+        raw_description=context.user_data.get("kn_description"),
+        fields=context.user_data.get("kn_fields") or {},
+        reported_date=context.user_data.get("kn_date") or None,
+    )
+    context.user_data[_KEY_ENTRY_ID] = kid
+    return kid
+
+
+def _gather_report_inputs(context) -> dict:
+    """
+    ورودی‌های سازمانی/Polish/QA گزارش از context — با fallback به DB.
+    (شبکهٔ ایمنی: اگر state حافظه گم شده باشد، از رکورد خوانده میشود.)
+    """
+    kid = context.user_data.get(_KEY_ENTRY_ID)
+
+    tree_path = context.user_data.get("kn_tree_path")
+    if not tree_path and kid:
+        try:
+            tree_path = models.get_knowledge_tree_path(kid)
+        except Exception:
+            logger.exception("خواندن tree_path ناموفق")
+        if tree_path:
+            context.user_data["kn_tree_path"] = tree_path
+
+    org = context.user_data.get("kn_org_metadata") or {}
+    if not org and kid:
+        try:
+            org = models.get_knowledge_org_metadata(kid) or {}
+        except Exception:
+            logger.exception("خواندن org_metadata ناموفق")
+        if org:
+            context.user_data["kn_org_metadata"] = org
+
+    return {
+        "tree_path": tree_path,
+        "org_metadata": org,
+        "project_name": (org or {}).get("project"),
+        "polished": context.user_data.get("kn_polished"),
+        "qa_notes": context.user_data.get("kn_qa_flags"),
+    }
+
+
+def _build_draft(context) -> tuple[dict, str]:
+    """گزارش + متن پیش‌نویس DANA را از وضعیت جاری میسازد."""
+    inputs = _gather_report_inputs(context)
+    report = build_report(
+        knowledge_type=context.user_data.get("kn_type"),
+        title=_compute_title(context),
+        fields=context.user_data.get("kn_fields") or {},
+        hashtags=context.user_data.get("kn_hashtags") or None,
+        impact_type=context.user_data.get("kn_impact_type"),
+        reporter_name=context.user_data.get("kn_reporter_name") or "—",
+        reporter_title=context.user_data.get("kn_reporter_title") or None,
+        reported_date=context.user_data.get("kn_date") or "—",
+        kn_number=None,
+        raw_description=context.user_data.get("kn_description"),
+        attachments=[f"{i:03d}.jpg" for i in range(1, len(context.user_data.get("kn_photos") or []) + 1)],
+        **inputs,
+    )
+    return report, render_text(report)
 
 
 async def _save_and_preview(msg, context) -> int:
     """
-    ذخیرهٔ پیش‌نویس (draft) در DB — در این لحظه id ساخته می‌شود؛
-    عکس‌ها به پوشهٔ نهایی منتقل می‌شوند و پیش‌نمایش DANA نشان داده می‌شود.
+    ذخیرهٔ پیش‌نویس (draft) در DB —
+    عکس‌ها به پوشهٔ نهایی منتقل میشوند و پیش‌نمایش DANA نشان داده میشود.
     """
     try:
         # پرامپت قبلی (تاریخ/تقویم/عکس‌ها) و خلاصهٔ پیوست‌ها حذف شوند
@@ -1300,42 +1393,15 @@ async def _save_and_preview(msg, context) -> int:
             await msg.reply_text("⛔ حساب شما ثبت نشده است. لطفاً /start بزنید.")
             return ConversationHandler.END
 
-        knowledge_type = context.user_data.get("kn_type")
-        fields = context.user_data.get("kn_fields") or {}
-        hashtags = context.user_data.get("kn_hashtags") or []
-        impact_type = context.user_data.get("kn_impact_type")
-
-        attachments = [f"{i:03d}.jpg" for i in range(1, len(context.user_data.get("kn_photos") or []) + 1)]
-
-        report = build_report(
-            knowledge_type=knowledge_type,
-            title=_compute_title(context),
-            fields=fields,
-            hashtags=hashtags or None,
-            impact_type=impact_type,
-            project_name=None,
-            contractor_name=None,
-            reporter_name=context.user_data.get("kn_reporter_name") or "—",
-            reporter_title=context.user_data.get("kn_reporter_title") or None,
-            reported_date=context.user_data.get("kn_date") or "—",
-            kn_number=None,
-            raw_description=context.user_data.get("kn_description"),
-            attachments=attachments,
-        )
-        draft = render_text(report)
-
-        knowledge_id = add_knowledge_entry(
-            telegram_id=chat_id,
-            knowledge_type=knowledge_type,
-            reporter_name=context.user_data.get("kn_reporter_name") or "—",
-            reporter_title=context.user_data.get("kn_reporter_title") or None,
-            raw_description=context.user_data.get("kn_description"),
-            fields=fields,
-            draft_text=draft,
-            reported_date=context.user_data.get("kn_date") or None,
-        )
-        context.user_data[_KEY_ENTRY_ID] = knowledge_id
+        knowledge_id = _ensure_knowledge_entry(context, chat_id, user)
+        report, draft = _build_draft(context)
         context.user_data["kn_report"] = report
+        try:
+            models.set_knowledge_fields(
+                knowledge_id, context.user_data.get("kn_fields") or {}, draft
+            )
+        except Exception:
+            logger.exception("ذخیرهٔ draft ناموفق")
 
         # انتقال عکس‌ها از پوشهٔ موقت به پوشهٔ نهایی + ثبت در DB
         photos = context.user_data.get("kn_photos") or []
@@ -1357,11 +1423,7 @@ async def _save_and_preview(msg, context) -> int:
             context.user_data["kn_photos"] = []
 
         text = "📋 *پیش‌نمایش پیش‌نویس DANA*\n\n" + draft
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ تأیید و ثبت نهایی", callback_data="kn_finish")],
-            [InlineKeyboardButton("❌ انصراف", callback_data="menu:main")],
-        ])
-        sent = await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        sent = await msg.reply_text(text, parse_mode="Markdown", reply_markup=_preview_keyboard())
         track_prompt(context, sent)
         return KN_PREVIEW
 
@@ -1393,14 +1455,30 @@ async def kn_finish(update, context) -> int:
 
         from engine.knowledge_numbering import generate_knowledge_number
 
+        knowledge_type = context.user_data.get("kn_type") or entry.get("knowledge_type")
+        context.user_data["kn_type"] = knowledge_type
+
+        # ⭐ پروژه برای درسآموخته الزامی است (فرم رسمی دانا)
+        org = (_gather_report_inputs(context).get("org_metadata") or {})
+        if knowledge_type == "lesson" and not str(org.get("project") or "").strip():
+            try:
+                await query.edit_message_text(
+                    "⚠️ فیلد «پروژه» برای ثبت درس‌آموخته الزامی است.\n"
+                    "لطفاً ابتدا آن را تعیین کنید:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🏗 تعیین پروژه", callback_data="kn_org:project")],
+                        [InlineKeyboardButton("↩️ بازگشت به پیش‌نمایش", callback_data="kn_edit:back")],
+                    ]),
+                )
+            except Exception:
+                pass
+            return KN_ORG_META
+
         number = generate_knowledge_number(entry["project_id"])
 
-        # بازسازی گزارش با شمارهٔ نهایی (گزارشِ ذخیره‌شده در مرحلهٔ پیش‌نمایش)
-        report = context.user_data.get("kn_report")
-        if not report:
-            await query.edit_message_text("⚠️ گزارش یافت نشد.", reply_markup=main_menu_keyboard(update.effective_user.id))
-            return ConversationHandler.END
-
+        # شبکهٔ ایمنی: گزارش همیشه از وضعیت جاری + DB بازسازی میشود
+        # (نه از گزارشِ کششده در حافظه — تا هیچ انتخابی مثل درخت گم نشود)
+        report, _draft_fresh = _build_draft(context)
         report = dict(report)
         report["metadata"] = [
             (label, value if label != "شماره ثبت" else number)
@@ -1663,7 +1741,9 @@ async def _final_assemble_and_preview(
     msg,
 ) -> int:
     """
-    پاس نهایی polish با AI + ساخت گزارش + ذخیره draft + رفتن به KN_PREVIEW.
+    پایان مصاحبه → پاس polish فیلدبهفیلد + QA سبک → ورود به تنظیمات سازمانی.
+    (پیش‌نویس نهایی پس از تکمیل تنظیمات سازمانی ساخته میشود تا درخت/پروژه و
+    سایر فیلدهای فرم دانا حتماً در گزارش بنشینند.)
     """
     # قفل «در حال پردازش» — دستی (چون update نداریم)
     tid = context.user_data.get("_chat_id")
@@ -1673,73 +1753,58 @@ async def _final_assemble_and_preview(
         set_busy(tid)
 
     try:
-        from engine.knowledge_interview import polish_dana_draft
+        from engine.knowledge_interview import polish_dana_draft, qa_flags
 
         await _prompt_reply(msg, context, "🔄 در حال ساخت فرم نهایی DANA...")
         knowledge_type = context.user_data["kn_type"]
         fields = context.user_data.get("kn_fields") or {}
 
-        # پاس polish (narrative + hashtags + project/contractor از متن)
-        # شکست AI نباید کل ثبت را زمین بزند — بدون narrative هم گزارش ساخته می‌شود.
+        # پاس polish (بازنویسی فیلدبهفیلد + هشتگ + پروژه استخراجی)
+        # شکست AI نباید کل ثبت را زمین بزند — بدون polish هم ادامه میدهیم.
         polish: dict = {}
         try:
             polish = await polish_dana_draft(
                 knowledge_type,
                 fields,
                 raw_description=context.user_data.get("kn_description"),
-                project_name=None,
-                contractor_name=None,
             )
         except Exception:
-            logger.warning("polish AI ناموفق — ادامه بدون بازنویسی روایت")
+            logger.warning("polish AI ناموفق — ادامه با همان متن کاربر")
             await _prompt_reply(
                 msg, context,
                 "⚠️ هوش مصنوعی موقتاً در دسترس نیست؛ فرم با همان متن شما ساخته می‌شود.",
             )
 
-        # ساخت گزارش با narrative AI در صورت موفقیت
-        narrative = polish.get("narrative")
-        hashtags = polish.get("hashtags")
-        extracted_project = polish.get("extracted_project")
-        extracted_contractor = polish.get("extracted_contractor")
+        context.user_data["kn_polished"] = polish or {}
 
-        # ذخیره hashtag در context (اگر polish پیشنهاد داد)
-        if hashtags:
-            context.user_data["kn_hashtags"] = hashtags
+        if polish.get("hashtags"):
+            context.user_data["kn_hashtags"] = polish["hashtags"]
+        if polish.get("extracted_project"):
+            org = context.user_data.setdefault("kn_org_metadata", {})
+            org.setdefault("project", polish["extracted_project"])
 
-        # ایجاد/به‌روزرسانی draft
-        report = build_report(
-            knowledge_type=knowledge_type,
-            title=_compute_title(context),
-            fields=fields,
-            hashtags=hashtags,
-            impact_type=context.user_data.get("kn_impact_type"),
-            project_name=extracted_project,
-            contractor_name=extracted_contractor,
-            reporter_name=context.user_data.get("kn_reporter_name") or "—",
-            reporter_title=context.user_data.get("kn_reporter_title") or None,
-            reported_date=context.user_data.get("kn_date") or "—",
-            kn_number=None,
-            raw_description=context.user_data.get("kn_description"),
-            attachments=[f"{i:03d}.jpg" for i in range(1, len(context.user_data.get("kn_photos") or []) + 1)],
-            narrative_override=narrative,
-        )
-        draft = render_text(report)
-        context.user_data["kn_report"] = report
+        # QA سبک غیرمسدودکننده — فقط هشدار، بدون مسدودسازی
+        flags: list[str] = []
+        try:
+            raw_flags = await qa_flags(
+                knowledge_type, fields, context.user_data.get("kn_description"),
+            )
+            flags = [
+                f"«{f.get('field', '')}»: {f.get('issue', '')}" for f in raw_flags
+            ]
+        except Exception:
+            logger.exception("QA سبک ناموفق — بدون هشدار ادامه میدهیم")
+        context.user_data["kn_qa_flags"] = flags
 
-        kid = context.user_data.get(_KEY_ENTRY_ID)
-        if kid:
-            try:
-                models.set_knowledge_fields(kid, fields, draft)
-            except Exception:
-                logger.exception("ذخیرهٔ draft ناموفق")
-
+        text, kb = _org_menu_payload(context)
         await _prompt_reply(
             msg, context,
-            f"✅ فرم DANA آماده شد.\n\n📋 *پیش‌نمایش:*\n\n{draft}",
-            reply_markup=_preview_keyboard(),
+            "✅ فرم محتوایی آماده شد.\n\n"
+            "⚙️ *تنظیمات سازمانی* را تکمیل کنید (درخت دانش برای ثبت در دانا لازم است):\n\n"
+            + text,
+            reply_markup=kb,
         )
-        return KN_PREVIEW
+        return KN_ORG_META
 
     except Exception:
         logger.exception("خطا در _final_assemble_and_preview")
@@ -1775,7 +1840,7 @@ def _current_org_display(context, knowledge_type: str) -> dict:
     return {
         "tree_display": " > ".join(tree_path) if tree_path else "انتخاب‌نشده",
         "committee_display": _short(org.get("committee")),
-        "seed_display": _short(org.get("seed")),
+        "project_display": _short(org.get("project")),
         "colleagues_display": _short(org.get("colleagues")),
         "hashtags_display": _short(" ".join("#" + h for h in hashtags) if hashtags else None),
         "scope_display": _short(org.get("scope")),
@@ -1839,21 +1904,22 @@ async def kn_org_committee(update, context) -> int:
         return KN_ORG_META
 
 
-async def kn_org_seed(update, context) -> int:
+async def kn_org_project(update, context) -> int:
+    """شروع ویرایش پروژه (درسآموخته ⭐ الزامی / دانش صریح اختیاری)."""
     try:
         query = update.callback_query
         await query.answer()
-        context.user_data["kn_org_pending_field"] = "seed"
-        current = (context.user_data.get("kn_org_metadata") or {}).get("seed", "")
+        context.user_data["kn_org_pending_field"] = "project"
+        current = (context.user_data.get("kn_org_metadata") or {}).get("project", "")
         await query.edit_message_text(
-            f"💡 *بذر پیشنهاد*\n\n"
+            f"🏗 *پروژه*\n\n"
             f"مقدار فعلی: {current or 'خالی'}\n\n"
-            "ایده اولیه از کجا آمد؟ بنویسید:",
+            "نام پروژه را بنویسید (یا /skip برای رد کردن):",
             parse_mode="Markdown",
         )
         return KN_ORG_META
     except Exception:
-        logger.exception("خطا در kn_org_seed")
+        logger.exception("خطا در kn_org_project")
         return KN_ORG_META
 
 
@@ -1954,8 +2020,8 @@ async def kn_org_text_input(update, context) -> int:
         return KN_ORG_META
 
 
-async def _show_org_menu(update, context) -> int:
-    """منوی org_meta را نشان میدهد (پس از ویرایش)."""
+def _org_menu_payload(context) -> tuple[str, InlineKeyboardMarkup]:
+    """متن + کیبورد منوی تنظیمات سازمانی (برای نمایش از هر مسیری)."""
     knowledge_type = context.user_data.get("kn_type")
     display = _current_org_display(context, knowledge_type)
     kb = _org_meta_keyboard(knowledge_type, display)
@@ -1963,15 +2029,23 @@ async def _show_org_menu(update, context) -> int:
     text_lines.append(f"  🌳 درخت: {display['tree_display']}")
     if knowledge_type == "suggestion":
         text_lines.append(f"  👥 کمیته: {display['committee_display']}")
-        text_lines.append(f"  💡 بذر: {display['seed_display']}")
+    if knowledge_type in ("lesson", "explicit"):
+        star = " ⭐" if knowledge_type == "lesson" else ""
+        text_lines.append(f"  🏗 پروژه{star}: {display['project_display']}")
     text_lines.append(f"  🤝 همکاران: {display['colleagues_display']}")
     text_lines.append(f"  #️⃣ هشتگها: {display['hashtags_display']}")
-    if knowledge_type == "explicit":
+    if knowledge_type in ("lesson", "explicit"):
         text_lines.append(f"  🏢 محدوده: {display['scope_display']}")
+    return "\n".join(text_lines), kb
+
+
+async def _show_org_menu(update, context) -> int:
+    """منوی org_meta را نشان میدهد (پس از ویرایش)."""
+    text, kb = _org_menu_payload(context)
 
     if update.callback_query:
         await update.callback_query.edit_message_text(
-            "\n".join(text_lines),
+            text,
             parse_mode="Markdown",
             reply_markup=kb,
         )
@@ -1980,7 +2054,7 @@ async def _show_org_menu(update, context) -> int:
     else:
         await delete_tracked(context)
         sent = await update.message.reply_text(
-            "\n".join(text_lines),
+            text,
             parse_mode="Markdown",
             reply_markup=kb,
         )
@@ -1989,49 +2063,13 @@ async def _show_org_menu(update, context) -> int:
 
 
 async def kn_org_done(update, context) -> int:
-    """پایان تنظیمات سازمانی → بازسازی گزارش + preview."""
+    """پایان تنظیمات سازمانی → ساخت پیش‌نویس نهایی + انتقال عکس‌ها + preview."""
     try:
         query = update.callback_query
         await query.answer()
-
-        # بازسازی گزارش با تنظیمات جدید
-        knowledge_type = context.user_data["kn_type"]
-        org = context.user_data.get("kn_org_metadata") or {}
-        tree_path = context.user_data.get("kn_tree_path")
-
-        report = build_report(
-            knowledge_type=knowledge_type,
-            title=_compute_title(context),
-            fields=context.user_data.get("kn_fields") or {},
-            hashtags=context.user_data.get("kn_hashtags") or None,
-            impact_type=context.user_data.get("kn_impact_type"),
-            project_name=None,
-            contractor_name=None,
-            reporter_name=context.user_data.get("kn_reporter_name") or "—",
-            reporter_title=context.user_data.get("kn_reporter_title") or None,
-            reported_date=context.user_data.get("kn_date") or "—",
-            kn_number=None,
-            raw_description=context.user_data.get("kn_description"),
-            attachments=[f"{i:03d}.jpg" for i in range(1, len(context.user_data.get("kn_photos") or []) + 1)],
-            narrative_override=None,
-            tree_path=tree_path,
-            org_metadata=org,
-        )
-        draft = render_text(report)
-        context.user_data["kn_report"] = report
-        kid = context.user_data.get(_KEY_ENTRY_ID)
-        if kid:
-            try:
-                models.set_knowledge_fields(kid, context.user_data.get("kn_fields") or {}, draft)
-            except Exception:
-                logger.exception("ذخیرهٔ draft ناموفق")
-
-        await query.edit_message_text(
-            f"✅ تنظیمات سازمانی ذخیره شد.\n\n📋 *پیش‌نمایش:*\n\n{draft}",
-            parse_mode="Markdown",
-            reply_markup=_preview_keyboard(),
-        )
-        return KN_PREVIEW
+        # همه‌چیز (ساخت گزارش با درخت/پروژه/Polish/QA، ذخیره، انتقال عکس‌ها)
+        # در یک نقطه متمرکز است تا هیچ داده‌ای بین مراحل گم نشود.
+        return await _save_and_preview(update.callback_query.message, context)
     except Exception:
         logger.exception("خطا در kn_org_done")
         return KN_ORG_META
@@ -2110,6 +2148,49 @@ async def kn_tree_ai_pick(update, context) -> int:
 
     except Exception:
         logger.exception("خطا در kn_tree_ai_pick")
+        return KN_TREE
+
+
+# نگاشت پاسخ متنی به ایندکس پیشنهاد (صفحهٔ پیشنهادهای AI درخت)
+_ORDINAL_PICKS: dict[str, int] = {
+    "1": 0, "2": 1, "3": 2, "4": 3, "5": 4,
+    "۱": 0, "۲": 1, "۳": 2, "۴": 3, "۵": 4,
+    "اول": 0, "دوم": 1, "سوم": 2, "چهارم": 3, "پنجم": 4,
+}
+
+
+async def kn_tree_pick_text(update, context) -> int:
+    """پاسخ متنی روی صفحهٔ پیشنهادهای AI — کاربر میتواند بگوید «اول» یا «۲»."""
+    try:
+        if context.user_data.get("kn_tree_typing"):
+            return KN_TREE  # در حالت تایپ مسیر کامل مزاحم نشو
+        suggestions = context.user_data.get("kn_tree_suggestions") or []
+        if not suggestions:
+            return KN_TREE
+
+        text = (update.message.text or "").strip()
+        idx = _ORDINAL_PICKS.get(text)
+        if idx is None or not (0 <= idx < len(suggestions)):
+            await _prompt_reply(
+                update.message, context,
+                "⚠️ لطفاً روی یکی از دکمه‌های پیشنهاد بزنید، یا شمارهٔ آن را بنویسید (مثلاً «اول»).",
+            )
+            return KN_TREE
+
+        path = suggestions[idx]["path"]
+        context.user_data["kn_tree_path"] = path
+        kid = context.user_data.get(_KEY_ENTRY_ID)
+        if kid:
+            try:
+                models.set_knowledge_tree_path(kid, path)
+            except Exception:
+                logger.exception("ذخیرهٔ tree_path ناموفق")
+
+        await delete_tracked(context)
+        await update.message.reply_text(f"✓ پیشنهاد شماره {idx + 1} ثبت شد.")
+        return await _show_org_menu(update, context)
+    except Exception:
+        logger.exception("خطا در kn_tree_pick_text")
         return KN_TREE
 
 
@@ -2338,26 +2419,7 @@ async def kn_edit_to_preview(update, context) -> int:
         query = update.callback_query
         await query.answer()
         # بازسازی گزارش
-        knowledge_type = context.user_data.get("kn_type")
-        report = build_report(
-            knowledge_type=knowledge_type,
-            title=_compute_title(context),
-            fields=context.user_data.get("kn_fields") or {},
-            hashtags=context.user_data.get("kn_hashtags") or None,
-            impact_type=context.user_data.get("kn_impact_type"),
-            project_name=None,
-            contractor_name=None,
-            reporter_name=context.user_data.get("kn_reporter_name") or "—",
-            reporter_title=context.user_data.get("kn_reporter_title") or None,
-            reported_date=context.user_data.get("kn_date") or "—",
-            kn_number=None,
-            raw_description=context.user_data.get("kn_description"),
-            attachments=[f"{i:03d}.jpg" for i in range(1, len(context.user_data.get("kn_photos") or []) + 1)],
-            narrative_override=None,
-            tree_path=context.user_data.get("kn_tree_path"),
-            org_metadata=context.user_data.get("kn_org_metadata"),
-        )
-        draft = render_text(report)
+        report, draft = _build_draft(context)
         context.user_data["kn_report"] = report
         kid = context.user_data.get(_KEY_ENTRY_ID)
         if kid:
@@ -2817,7 +2879,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
             KN_ORG_META: [
                 CallbackQueryHandler(kn_org_tree, pattern=r"^kn_org:tree$"),
                 CallbackQueryHandler(kn_org_committee, pattern=r"^kn_org:committee$"),
-                CallbackQueryHandler(kn_org_seed, pattern=r"^kn_org:seed$"),
+                CallbackQueryHandler(kn_org_project, pattern=r"^kn_org:project$"),
                 CallbackQueryHandler(kn_org_colleagues, pattern=r"^kn_org:colleagues$"),
                 CallbackQueryHandler(kn_org_hashtags, pattern=r"^kn_org:hashtags$"),
                 CallbackQueryHandler(kn_org_scope, pattern=r"^kn_org:scope$"),
@@ -2834,6 +2896,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_tree_confirm, pattern=r"^kn_tree:confirm$"),
                 CallbackQueryHandler(kn_tree_type, pattern=r"^kn_tree:type$"),
                 CallbackQueryHandler(kn_tree_skip, pattern=r"^kn_tree:skip$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, kn_tree_pick_text),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_tree_type_done),
                 MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_tree_type_done)),
             ],

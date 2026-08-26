@@ -158,7 +158,7 @@ def render_dana_pdf(report: dict, out_path: str) -> bool:
         leftMargin=20 * mm, rightMargin=20 * mm,
         topMargin=15 * mm, bottomMargin=15 * mm,
         title=f"پیش‌نویس ثبت دانش در DANA — {report.get('title', '')}",
-        author="WelderBot",
+        author="ربات ثبت دانش مپنا توسعه",
     )
 
     story: list = []
@@ -168,6 +168,8 @@ def render_dana_pdf(report: dict, out_path: str) -> bool:
     story.append(HRFlowable(width="100%", thickness=1.2, color=colors.HexColor("#1F4E79")))
     story.append(Paragraph(_fa(f"نوع دانش: {report['type_label']}"), body_style))
     story.append(Paragraph(_fa(f"وضعیت QA: {report['qa_status']}"), body_style))
+    for note in report.get("qa_notes") or []:
+        story.append(Paragraph(_fa(f"⚠️ {note}"), body_style))
     story.append(Paragraph(_fa(f"بازبینی اپراتور: {report['operator_review']}"), body_style))
 
     # ── محتوا ──────────────────────────────────────────────────────────────
@@ -285,6 +287,8 @@ def render_dana_docx(report: dict, out_path: str) -> str:
     _add_paragraph("پیش‌نویس ثبت دانش در DANA", size=17, bold=True, color="1F4E79", space=8)
     _add_paragraph(f"نوع دانش: {report['type_label']}", size=11, bold=False)
     _add_paragraph(f"وضعیت QA: {report['qa_status']}", size=11, bold=False)
+    for note in report.get("qa_notes") or []:
+        _add_paragraph(f"⚠️ {note}", size=11, bold=False)
     _add_paragraph(f"بازبینی اپراتور: {report['operator_review']}", size=11, bold=False)
 
     # ── محتوا ──────────────────────────────────────────────────────────────

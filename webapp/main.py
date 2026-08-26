@@ -104,15 +104,29 @@ _KN_TYPE_FA = {
 }
 
 
+def _jalali_display(reported_date: str | None, created_at: str | None) -> str:
+    """تاریخ نمایشی همیشه شمسی: اول reported_date کاربر، بعد تبدیل created_at."""
+    raw = (reported_date or "").strip()
+    if raw:
+        return raw
+    created = (created_at or "")[:10]
+    if not created:
+        return ""
+    try:
+        from utils.dates import gregorian_to_jalali
+        return gregorian_to_jalali(created)
+    except Exception:
+        return created
+
+
 def _kn_item(e: dict) -> dict:
-    created = (e.get("created_at") or "")[:10]
     return {
         "id": e["id"],
         "title": _kn_title(e),
         "type": _KN_TYPE_FA.get(e.get("knowledge_type"), "دانش"),
         "status": e.get("status"),
         "kn_number": e.get("kn_number"),
-        "date": created,
+        "date": _jalali_display(e.get("reported_date"), e.get("created_at")),
     }
 
 
@@ -138,7 +152,7 @@ def _obs_item(o: dict) -> dict:
         "id": o["id"],
         "title": _obs_title(o),
         "status": o.get("status"),
-        "date": o.get("obs_date") or (o.get("created_at") or "")[:10],
+        "date": _jalali_display(o.get("obs_date"), o.get("created_at")),
     }
 
 

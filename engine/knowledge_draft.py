@@ -58,24 +58,27 @@ def build_report(
     hashtags: list[str] | None,
     impact_type: str | None,
     project_name: str | None = None,
-    contractor_name: str | None = None,
     reporter_name: str,
     reporter_title: str | None,
     reported_date: str,
     kn_number: str | None = None,
     raw_description: str | None = None,
     attachments: list[str] | None = None,
-    narrative_override: str | None = None,
+    polished: dict | None = None,
     tree_path: list[str] | None = None,
     org_metadata: dict | None = None,
+    qa_notes: list[str] | None = None,
 ) -> dict:
     """
-    مدل گزارش DANA را می‌سازد.
+    مدل گزارش DANA را میسازد.
+
+    polished: خروجی فیلدبهفیلد polish_dana_draft (بازنویسی حرفهای محتوا).
+    qa_notes: هشدارهای QA سبک (غیرمسدودکننده) برای نمایش در بخش وضعیت QA.
 
     خروجی (dict):
         {
             "title", "type", "type_label",
-            "qa_status", "operator_review",
+            "qa_status", "qa_notes", "operator_review",
             "content":  [(فیلد، مقدار), ...],
             "metadata": [(فیلد، مقدار), ...],
             "resources": [str, ...],
@@ -87,44 +90,43 @@ def build_report(
     type_label = TYPE_LABELS.get(knowledge_type, knowledge_type)
     hashtag_text = " ".join(f"#{h}" for h in hashtags) if hashtags else ""
     org = org_metadata or {}
+    pol = polished or {}
 
     # ── محتوا — فیلدهای فرم DANA به ازای هر نوع ─────────────────────────────
-    # اگر narrative_override داده شده، در بخش اصلی محتوا استفاده میشود
-    # (AI polish در فاز۳ آن را تولید میکند)؛ در غیر این صورت، مکانیکی.
+    # فیلدهای ستارهدار فرم در صورت خالی بودن با _OPERATOR_REQUIRED علامت
+    # میخورند؛ متن صیقلخورده AI فقط جایگزین همان فیلد میشود، نه ادغام.
     content: list[tuple[str, str]] = []
     if knowledge_type == "lesson":
-        content.append(("عنوان", title or _NOT_PROVIDED))
-        if narrative_override:
-            content.append(("شرح درس آموخته", narrative_override))
-        else:
-            content.append(("شرح درس آموخته", _lesson_description(fields, raw_description)))
-        content.append(("نتیجه اجرا", fields.get("result") or _NOT_PROVIDED))
+        content.append(("عنوان", title or _OPERATOR_REQUIRED))
+        desc = pol.get("polished_description") or _lesson_description(fields, raw_description)
+        content.append(("شرح درس آموخته", desc or _OPERATOR_REQUIRED))
+        content.append(("نتیجه اجرا", fields.get("result") or _OPERATOR_REQUIRED))
         if fields.get("recommendation"):
             content.append(("توصیه", fields["recommendation"]))
     elif knowledge_type == "suggestion":
-        content.append(("عنوان پیشنهاد", title or _NOT_PROVIDED))
-        if narrative_override:
-            content.append(("شرح پیشنهاد", narrative_override))
-        else:
-            content.append(("وضع موجود", fields.get("current_state") or _NOT_PROVIDED))
-            content.append(("پیشنهاد بهبود", fields.get("proposal") or _NOT_PROVIDED))
-        content.append(("تاثیر اجرای پیشنهاد", impact_type or _NOT_PROVIDED))
+        content.append(("عنوان پیشنهاد", title or _OPERATOR_REQUIRED))
+        # فیلدهای رسمی فرم دانا — همیشه جدا نمایش داده میشوند (بدون ادغام روایی)
+        content.append((
+            "وضع موجود",
+            pol.get("polished_current_state") or fields.get("current_state") or _OPERATOR_REQUIRED,
+        ))
+        content.append((
+            "پیشنهاد بهبود",
+            pol.get("polished_proposal") or fields.get("proposal") or _OPERATOR_REQUIRED,
+        ))
+        content.append(("تاثیر اجرای پیشنهاد", impact_type or _OPERATOR_REQUIRED))
         # پیشنهاد پیادهسازی‌نشده است → نتایج = اثر مورد انتظار با علامت
         expected = fields.get("expected_impact")
         if expected:
             content.append(("نتایج حاصل از اجرای پیشنهاد", f"{expected} (اثر مورد انتظار — تأیید نشده)"))
         else:
-            content.append(("نتایج حاصل از اجرای پیشنهاد", _NOT_PROVIDED))
+            content.append(("نتایج حاصل از اجرای پیشنهاد", _OPERATOR_REQUIRED))
     else:  # explicit
-        content.append(("عنوان", title or _NOT_PROVIDED))
-        if narrative_override:
-            content.append(("شرح", narrative_override))
-        else:
-            content.append(("شرح", fields.get("description") or (raw_description or "").strip() or _NOT_PROVIDED))
-        content.append((
-            "زیرنوع دانش صریح",
-            "[پیشنهادی — کتاب/محتوای آموزشی/لینک/گزارش بین‌المللی/پادکست/مقاله/اختراع/مجله/استاندارد]",
-        ))
+        content.append(("عنوان", title or _OPERATOR_REQUIRED))
+        desc = pol.get("polished_description") or fields.get("description") or (raw_description or "").strip()
+        content.append(("توضیحات", desc or _OPERATOR_REQUIRED))
+        subtype_value = (fields.get("subtype") or "").strip()
+        content.append(("زیرنوع دانش صریح", subtype_value or "[پیشنهادی — انتخاب نشده]"))
 
     # ── فراداده ────────────────────────────────────────────────────────────
     # درخت دانش: اگر مسیر انتخاب شده باشد، نشان داده میشود؛ وگرنه placeholder.
@@ -132,26 +134,29 @@ def build_report(
         tree_display = " > ".join(tree_path)
         tree_value = tree_display
     else:
-        tree_value = f"[پیشنهادی — تعیین در opencode] {_OPERATOR_REQUIRED}"
+        tree_value = f"[نیازمند انتخاب و تأیید اپراتور] {_OPERATOR_REQUIRED}"
 
     metadata: list[tuple[str, str]] = [
         ("درخت دانش", tree_value),
         ("پروژه", project_name or _NOT_PROVIDED),
-        ("پیمانکار", contractor_name or _NOT_PROVIDED),
         ("گزارش‌دهنده", reporter_name + (f" — {reporter_title}" if reporter_title else "")),
         ("تاریخ ثبت", reported_date or _NOT_PROVIDED),
         ("شماره ثبت", kn_number or "[پیش‌نمایش — قبل از ثبت نهایی]"),
         ("سطح دسترسی", "عادی"),
         ("همکاران", org.get("colleagues") or _NOT_PROVIDED),
-        ("هشتگ‌ها", hashtag_text or _NOT_PROVIDED),
+        ("هشتگ‌ها", hashtag_text or _OPERATOR_REQUIRED),
         ("فایل پیوست", "[عکس‌ها آماده برای بارگذاری — نه بارگذاری‌شده]" if attachments else _NOT_PROVIDED),
     ]
-    # متادیتای سازمانی اضافی بر اساس نوع
-    if knowledge_type == "suggestion":
-        metadata.append(("کمیته تخصصی", org.get("committee") or _NOT_PROVIDED))
-        metadata.append(("بذر پیشنهاد", org.get("seed") or _NOT_PROVIDED))
+    if knowledge_type == "lesson":
+        # دستورالعمل و فرایندها: اختیاری است و پرسیده نمیشود — فقط جای آن در فرم باشد
+        metadata.insert(1, ("دستورالعمل و فرایندها", _NOT_PROVIDED))
+        metadata.insert(3, ("محدوده سازمانی (حیطه)", org.get("scope") or _NOT_PROVIDED))
+    elif knowledge_type == "suggestion":
+        metadata.append(("کمیته تخصصی", org.get("committee") or _OPERATOR_REQUIRED))
+        # طبق فرم دانا این فیلد باید خالی بماند — پرسیده نمیشود و پر نمی شود
+        metadata.append(("بذر پیشنهاد", "— (طبق فرم خالی می‌ماند)"))
     if knowledge_type == "explicit":
-        metadata.append(("محدوده سازمانی", org.get("scope") or _NOT_PROVIDED))
+        metadata.insert(2, ("محدوده سازمانی (حیطه)", org.get("scope") or _NOT_PROVIDED))
 
     # ── منابع ──────────────────────────────────────────────────────────────
     resources: list[str] = []
@@ -164,31 +169,34 @@ def build_report(
     # ── موارد حل‌نشده ──────────────────────────────────────────────────────
     unresolved: list[str] = []
     if not tree_path:
-        unresolved.append("انتخاب و تأیید نهایی درخت دانش (پیشنهادی: تعیین در opencode).")
-    if not project_name:
-        unresolved.append("تأیید نام رسمی پروژه (در متن دانش ذکر شده ولی به‌عنوان پروژه تأیید نشده).")
-    if not contractor_name:
-        unresolved.append("تأیید نام رسمی پیمانکار (در صورت مرتبط بودن).")
+        unresolved.append("انتخاب و تأیید نهایی درخت دانش.")
+    if knowledge_type == "lesson" and not project_name:
+        unresolved.append("تعیین پروژه (فیلد الزامی فرم دانا برای درس آموخته).")
     if not org.get("colleagues"):
-        unresolved.append("تأیید فهرست همکاران درگیر.")
+        unresolved.append("تأیید فهرست همکاران درگیر (اختیاری).")
     if knowledge_type == "suggestion":
         if not org.get("committee"):
             unresolved.append("تأیید کمیته تخصصی پیشنهادی.")
-        if not org.get("seed"):
-            unresolved.append("تعیین بذر پیشنهاد (ایده از کجا آمد).")
+        if not impact_type:
+            unresolved.append("تعیین تاثیر اجرای پیشنهاد (کیفی/کمی).")
     if knowledge_type == "explicit":
         if not org.get("scope"):
-            unresolved.append("تعیین محدوده سازمانی.")
-        unresolved.append("تعیین زیرنوع دانش صریح (کتاب/مقاله/لینک/...).")
+            unresolved.append("تعیین محدوده سازمانی (اختیاری).")
+        if not (fields.get("subtype") or "").strip():
+            unresolved.append("تعیین زیرنوع دانش صریح (کتاب/مقاله/لینک/...).")
     # اگر همه چیز پر شده، یک مورد نمادین
     if not unresolved:
         unresolved.append("هیچ مورد حل‌نشده‌ای باقی نمانده است.")
+
+    notes = [str(n) for n in (qa_notes or []) if str(n).strip()]
+    qa_status = f"نیازمند بازبینی ({len(notes)} مورد)" if notes else "نیازمند بازبینی"
 
     return {
         "title": title,
         "type": knowledge_type,
         "type_label": type_label,
-        "qa_status": "نیازمند بازبینی",
+        "qa_status": qa_status,
+        "qa_notes": notes,
         "operator_review": "الزامی",
         "content": content,
         "metadata": metadata,
@@ -196,7 +204,7 @@ def build_report(
         "unresolved": unresolved,
         "checklist": _CHECKLIST,
         "footer": (
-            "تولید شده توسط WelderBot (مطابق organizational-knowledge-skill) — "
+            "تولید شده توسط ربات ثبت دانش مپنا توسعه — "
             "پیش‌نویس برای بازبینی و تأیید انسانی؛ ثبت نهایی در DANA بر عهده اپراتور است."
         ),
     }
@@ -294,7 +302,11 @@ def render_text(report: dict) -> str:
 
     # QA
     lines.append("────── *وضعیت QA* ──────")
-    lines.append(report["qa_status"] + " — " + "مسئلهٔ حیاتی یافت نشد؛ موارد حل‌نشده را بازبینی کنید.")
+    lines.append(f"وضعیت کلی: {report['qa_status']}")
+    for note in report.get("qa_notes") or []:
+        lines.append(f"⚠️ {note}")
+    if not report.get("qa_notes"):
+        lines.append("مسئلهٔ حیاتی یافت نشد؛ موارد حل‌نشده را بازبینی کنید.")
     lines.append("")
 
     # موارد حل‌نشده

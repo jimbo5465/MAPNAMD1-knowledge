@@ -49,11 +49,11 @@ FIELD_SCHEMAS: dict[str, dict[str, str]] = {
         "current_state": "وضع موجود",
         "problem": "مشکل یا فرصت بهبود",
         "proposal": "پیشنهاد بهبود",
-        "expected_impact": "نتایج مورد انتظار",
-        "seed": "بذر پیشنهاد",
-        "committee": "کمیتهٔ تخصصی پیشنهادی",
+        "expected_impact": "نتایج حاصل از اجرای پیشنهاد (اثر مورد انتظار)",
         "colleagues": "همکاران درگیر",
     },
+    # توجه: «بذر پیشنهاد» طبق فرم رسمی DANA باید خالی بماند و پرسیده نمیشود؛
+    # «کمیته تخصصی» در مرحلهٔ اطلاعات سازمانی (نه فیلدهای متنی) پرسیده میشود.
     "explicit": {
         "subject": "موضوع اصلی",
         "description": "شرح کامل",
@@ -69,7 +69,7 @@ BUTTON_FIELDS: dict[str, dict[str, list[str]]] = {
     },
     "explicit": {
         "subtype": [
-            "کتاب", "مقاله", "لینک", "گزارش بین‌المللی",
+            "کتاب", "محتوای آموزشی", "مقاله", "لینک", "گزارش بین‌المللی",
             "پادکست", "اختراع", "مجله", "استاندارد",
         ],
     },
@@ -80,6 +80,40 @@ TYPE_LABELS: dict[str, str] = {
     "suggestion": "پیشنهاد",
     "explicit": "دانش صریح",
 }
+
+# ── اولویت فیلدها بر اساس ستاره‌های فرم رسمی DANA ────────────────────────────
+# حیاتی = در فرم DANA ستاره‌دار است و باید اول پرسیده/تأمین شود؛
+# مهم = ارزش تکمیل بالا ولی ستاره‌دار نیست؛ اختیاری = در انتها و قابل رد.
+FIELD_PRIORITY: dict[str, dict[str, list[str]]] = {
+    "lesson": {
+        "critical": ["problem", "action", "result", "lesson"],
+        "important": ["context", "cause", "recommendation"],
+        "optional": ["status", "transferability"],
+    },
+    "suggestion": {
+        # «نتایج حاصل از اجرای پیشنهاد» در DANA ستاره‌دار است و از
+        # expected_impact + نشانگر «اثر مورد انتظار — تأیید نشده» ساخته میشود.
+        "critical": ["current_state", "proposal", "expected_impact"],
+        "important": ["problem"],
+        "optional": ["colleagues"],
+    },
+    "explicit": {
+        "critical": ["subject", "description"],
+        "important": [],
+        "optional": ["scope", "colleagues"],
+    },
+}
+
+
+def order_fields_by_priority(knowledge_type: str, keys: list[str]) -> list[str]:
+    """کلیدها را بر اساس اولویت فرم DANA مرتب میکند (حیاتی → مهم → اختیاری)."""
+    prio = FIELD_PRIORITY.get(knowledge_type, {})
+    rank: dict[str, int] = {}
+    for tier, offset in (("critical", 0), ("important", 1000), ("optional", 2000)):
+        for i, k in enumerate(prio.get(tier, [])):
+            rank[k] = offset + i
+    max_rank = 3000
+    return sorted(keys, key=lambda k: rank.get(k, max_rank))
 
 _MAX_DESCRIPTION_LEN = 4000
 
@@ -250,7 +284,7 @@ async def extract_fields(knowledge_type: str, raw_text: str) -> dict:
     اگر AI غیرفعال باشد یا خطا بدهد، fields خالی و missing = همه فیلدهاست
     (handler همه را دستی می‌پرسد). هیچ استثنایی بیرون نمی‌رود.
     """
-    empty_missing = field_order(knowledge_type)
+    empty_missing = order_fields_by_priority(knowledge_type, field_order(knowledge_type))
     # «تاثیر اجرای پیشنهاد» برای پیشنهادها همیشه باید پرسیده شود
     if knowledge_type == "suggestion":
         empty_missing.insert(0, "impact_type")
@@ -316,7 +350,9 @@ async def extract_fields(knowledge_type: str, raw_text: str) -> dict:
             reason = _cls["reason"].strip()
     conflict = recommended != knowledge_type
 
-    missing = [k for k in field_order(knowledge_type) if k not in fields]
+    missing = order_fields_by_priority(
+        knowledge_type, [k for k in field_order(knowledge_type) if k not in fields]
+    )
     # «تاثیر اجرای پیشنهاد» اگر از متن درنیامد، باید دستی پرسیده شود
     if knowledge_type == "suggestion" and impact_type is None:
         missing.insert(0, "impact_type")

@@ -41,7 +41,7 @@ INTERVIEW_FRAMEWORKS: dict[str, list[str]] = {
     ],
     "suggestion": [
         "current_state", "problem", "proposal", "expected_impact",
-        "seed", "committee", "colleagues",
+        "colleagues",
         # impact_type در انتها بهصورت دکمهای پرسیده میشود
         "impact_type",
     ],
@@ -76,11 +76,30 @@ def build_interview_system_prompt(knowledge_type: str) -> str:
             f"\nکلید ویژهٔ «{k}»: یکی از {options} (نه متن آزاد)"
         )
 
+    # فیلدهای الزامی فرم رسمی DANA — لنگرگاه مصاحبه
+    dana_required: dict[str, str] = {
+        "lesson": "شرح درس آموخته (ترکیب زمینه/مشکل/اقدام/درس) و نتیجه اجرا",
+        "suggestion": (
+            "وضع موجود، پیشنهاد بهبود، تاثیر اجرای پیشنهاد (کیفی/کمی)، "
+            "و نتایج حاصل از اجرای پیشنهاد (که همان اثر مورد انتظار است)"
+        ),
+        "explicit": "عنوان و شرح کامل منبع",
+    }
+    required_line = dana_required.get(
+        knowledge_type, "فیلدهای کلیدی این نوع دانش"
+    )
+
     return f"""تو یک مصاحبه‌گر دانش سازمانی هستی. یک اپراتور باتجربه در یک سایت
 صنعتی (نیروگاه، پالایشگاه، کارخانه) پیش روی توست.
-وظیفهٔ تو: کمک به او برای ثبت تجربه/دانشش مطابق ساختار استاندارد DANA.
+وظیفهٔ تو: کمک به او برای پر کردن «فرم رسمی ثبت دانش در سامانه دانا (DANA)».
+هدف نهایی: ثبت این دانش در دانا؛ بنابراین مصاحبه باید اطلاعات لازم برای
+فیلدهای رسمی فرم را جمع کند.
 
 نوع دانش: {type_label}
+
+⚠️ فیلدهای الزامی فرم دانا که حتماً باید پوشش داده شوند:
+{required_line}
+(«بذر پیشنهاد» جزو سؤالات تو نیست — طبق فرم دانا خالی میماند.)
 
 فیلدهایی که باید پر شوند:
 {fields_lines}
@@ -120,27 +139,34 @@ def build_interview_system_prompt(knowledge_type: str) -> str:
 
 
 def build_polish_system_prompt() -> str:
-    """پرامپت سیستم برای پاس polish نهایی فرم DANA."""
-    return """تو یک دستیار آماده‌سازی فرم DANA هستی.
-یک رکورد دانش سازمانی دریافت میکنی و باید آن را برای ثبت نهایی آماده کنی.
+    """پرامپت سیستم برای پاس polish نهایی فرم DANA (خروجی فیلدبهفیلد)."""
+    return """تو یک دستیار آمادهسازی فرم DANA هستی.
+یک رکورد دانش سازمانی دریافت میکنی و باید آن را برای ثبت نهایی در
+سامانه دانا آماده کنی.
 
 وظایف:
-1. یک narrative حرفه‌ای به زبان فارسی بنویس که فیلدهای محتوایی را به شکل
-   روان و ساختارمند ترکیب کند (مثلاً برای درس‌آموخته: زمینه → مشکل →
-   اقدام → نتیجه → درس اصلی → توصیه).
-2. اگر نام پروژه یا پیمانکار در شرح اولیه یا فیلدها ذکر شده، استخراج کن.
-4. تا ۵ هشتگ مرتبط (فارسی، بدون #) پیشنهاد بده.
-5. اگر عنوان فعلی ضعیف یا نامفهوم است، پیشنهاد بهتر بده.
+1. محتوای فیلدهای رسمی فرم را جداگانه و به زبان فارسی حرفهای بازنویسی کن —
+   هر فیلد خروجی مستقل دارد؛ هیچگاه چند فیلد را در یک متن ادغام نکن:
+   - درسآموخته: «polished_description» = شرح درسآموخته (زمینه → مشکل →
+     اقدام → نتیجه → درس اصلی، روان و ساختارمند).
+   - پیشنهاد: «polished_current_state» = وضع موجود، و
+     «polished_proposal» = پیشنهاد بهبود (دو متن کاملاً جدا).
+   - دانش صریح: «polished_description» = شرح/توضیحات منبع.
+2. اگر نام پروژه در شرح اولیه یا فیلدها ذکر شده، استخراج کن.
+3. تا ۵ هشتگ مرتبط (فارسی، بدون #) پیشنهاد بده.
+4. اگر عنوان فعلی ضعیف یا نامفهوم است، پیشنهاد بهتر بده.
 
-خروجی JSON خالص:
+خروجی JSON خالص (فقط کلیدهای مربوط به همین نوع دانش + کلیدهای مشترک):
 {
-  "narrative": "<متن narrative فارسی، ۳–۶ جمله>",
+  "polished_description": "<برای درسآموخته/دانش صریح یا null>",
+  "polished_current_state": "<فقط پیشنهاد یا null>",
+  "polished_proposal": "<فقط پیشنهاد یا null>",
   "extracted_project": "<نام پروژه یا null>",
-  "extracted_contractor": "<نام پیمانکار یا null>",
   "hashtags": ["برچسب۱", "برچسب۲", ...],
   "title_suggestion": "<پیشنهاد عنوان بهتر یا null>"
 }
 
+قواعد: هیچ واقعیت، عدد یا نتیجهای که در ورودی نیست اضافه نکن.
 اگر چیزی برای گفتن نداری، مقدار null بگذار."""
 
 
@@ -337,16 +363,16 @@ async def polish_dana_draft(
     fields: dict,
     raw_description: str | None,
     project_name: str | None = None,
-    contractor_name: str | None = None,
 ) -> dict:
     """
-    پاس polish — narrative حرفه‌ای + استخراج پروژه/پیمانکار + هشتگ + پیشنهاد عنوان.
+    پاس polish — بازنویسی حرفهای فیلدبهفیلد + استخراج پروژه + هشتگ + عنوان.
 
-    خروجی:
+    خروجی (کلیدهای هر نوع فقط در صورت موفقیت پر میشوند):
         {
-            "narrative": str | None,
+            "polished_description": str | None,      # درسآموخته / دانش صریح
+            "polished_current_state": str | None,    # پیشنهاد
+            "polished_proposal": str | None,         # پیشنهاد
             "extracted_project": str | None,
-            "extracted_contractor": str | None,
             "hashtags": list[str] | None,
             "title_suggestion": str | None,
         }
@@ -354,9 +380,10 @@ async def polish_dana_draft(
     اگر AI در دسترس نباشد → همه None.
     """
     empty = {
-        "narrative": None,
+        "polished_description": None,
+        "polished_current_state": None,
+        "polished_proposal": None,
         "extracted_project": project_name,
-        "extracted_contractor": contractor_name,
         "hashtags": None,
         "title_suggestion": None,
     }
@@ -383,15 +410,20 @@ async def polish_dana_draft(
         return empty
 
     result = dict(empty)
-    narrative = parsed.get("narrative")
-    if isinstance(narrative, str) and narrative.strip():
-        result["narrative"] = narrative.strip()
+
+    def _set_str(target_key: str, *source_keys: str) -> None:
+        for sk in source_keys:
+            v = parsed.get(sk)
+            if isinstance(v, str) and v.strip():
+                result[target_key] = v.strip()
+                return
+
+    _set_str("polished_description", "polished_description")
+    _set_str("polished_current_state", "polished_current_state")
+    _set_str("polished_proposal", "polished_proposal")
     ep = parsed.get("extracted_project")
     if isinstance(ep, str) and ep.strip():
         result["extracted_project"] = ep.strip()
-    ec = parsed.get("extracted_contractor")
-    if isinstance(ec, str) and ec.strip():
-        result["extracted_contractor"] = ec.strip()
     ht = parsed.get("hashtags")
     if isinstance(ht, list):
         tags = [str(h).strip().lstrip("#") for h in ht if str(h).strip()]
@@ -400,6 +432,73 @@ async def polish_dana_draft(
     if isinstance(ts, str) and ts.strip():
         result["title_suggestion"] = ts.strip()
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API: QA سبک — غیرمسدودکننده
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_qa_system_prompt() -> str:
+    """پرامپت QA سبک مطابق references/quality-assurance.md (نسخه گفتگومحور)."""
+    return """تو یک بازبین کیفیت سبک رکوردهای دانش سازمانی هستی (مطابق موتور QA مهارت).
+رکورد را از نظر «ادعاهای بیپشتوانه» بررسی کن؛ بازنویسی نکن.
+
+چیزی که فلگ میکنی (حداکثر ۵ مورد):
+- عدد/درصد/مبلغ/صرفهجویی که در ورودی کاربر وجود ندارد یا بزرگنمایی شده.
+- علتِ قطعیِ اثباتنشده (علت حدسی بهجای «علت قطعی» باید علامت بخورد).
+- ادغام «اثر مورد انتظار» با «نتیجه واقعی» (در پیشنهادها رایج است).
+- تناقض داخلی آشکار بین فیلدها.
+
+خروجی JSON خالص:
+{
+  "flags": [
+    {"field": "<کلید فیلد یا عنوان کوتاه>", "issue": "<یک جمله فارسی>"}
+  ]
+}
+
+اگر مشکلی نیست: {"flags": []}. هیچ‌وقت فیلدی را اختراع نکن."""
+
+
+async def qa_flags(
+    knowledge_type: str,
+    fields: dict,
+    raw_description: str | None,
+) -> list[dict]:
+    """
+    QA سبک غیرمسدودکننده — فهرست هشدارها برای نمایش به اپراتور.
+    خروجی: [{"field": str, "issue": str}] (حداکثر ۵) — خطا/AI خاموش → [].
+    """
+    if not is_ai_enabled():
+        return []
+
+    type_label = TYPE_LABELS.get(knowledge_type, knowledge_type)
+    fields_json = json.dumps(fields, ensure_ascii=False, indent=2)
+    try:
+        parsed = await _call_llm_json([
+            {"role": "system", "content": build_qa_system_prompt()},
+            {"role": "user", "content": (
+                f"نوع دانش: {type_label}\n\nفیلدها:\n{fields_json}\n\n"
+                f"شرح اولیه:\n{raw_description or '(خالی)'}"
+            )},
+        ])
+    except Exception:
+        logger.exception("QA سبک ناموفق — بدون هشدار ادامه میدهیم")
+        return []
+
+    flags = parsed.get("flags") if isinstance(parsed, dict) else None
+    if not isinstance(flags, list):
+        return []
+    out: list[dict] = []
+    for f in flags:
+        if not isinstance(f, dict):
+            continue
+        field = f.get("field")
+        issue = f.get("issue")
+        if isinstance(field, str) and isinstance(issue, str) and issue.strip():
+            out.append({"field": field.strip()[:60], "issue": issue.strip()[:300]})
+        if len(out) >= 5:
+            break
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
