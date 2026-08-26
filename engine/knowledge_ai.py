@@ -16,6 +16,7 @@ engine/knowledge_ai.py
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -343,6 +344,8 @@ async def _call_llm_messages(
     """
     فراخوانی chat completions با لیست پیام کامل (system + history + user).
     برای مصاحبه و پاس‌های چندمرحلهای استفاده میشود.
+
+    مدل‌های رایگان گاهی 5xx/timeout می‌دهند — تا ۴ تلاش با مکث کوتاه تکرار می‌شود.
     """
     url = f"{config.KNOWLEDGE_AI_BASE_URL.rstrip('/')}/chat/completions"
     payload = {
@@ -352,14 +355,34 @@ async def _call_llm_messages(
         "max_tokens": max_tokens,
     }
     headers = {"Authorization": f"Bearer {config.KNOWLEDGE_AI_API_KEY}"}
-    async with httpx.AsyncClient(timeout=config.KNOWLEDGE_AI_TIMEOUT) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"پاسخ LLM فرمت غیرمنتظره‌ای دارد: {exc}") from exc
+
+    last_exc: Exception | None = None
+    for attempt in range(1, 5):
+        try:
+            async with httpx.AsyncClient(timeout=config.KNOWLEDGE_AI_TIMEOUT) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            try:
+                return data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise RuntimeError(f"پاسخ LLM فرمت غیرمنتظره‌ای دارد: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            # 4xx غیر از 429 یعنی خطای درخواست — تکرار بی‌فایده است
+            status = exc.response.status_code
+            if 400 <= status < 500 and status != 429:
+                raise
+            last_exc = exc
+            logger.warning(
+                "LLM %s (attempt %d/4) — وضعیت %s", url, attempt, status,
+            )
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_exc = exc
+            logger.warning("LLM شبکه/timeout (attempt %d/4): %s", attempt, exc)
+
+        await asyncio.sleep(2 * attempt)
+
+    raise last_exc if last_exc else RuntimeError("LLM ناموفق")
 
 
 async def _call_llm(system: str, user_text: str) -> str:
