@@ -1425,13 +1425,31 @@ async def _save_and_preview(msg, context) -> int:
             context.user_data["kn_photos"] = []
 
         text = "📋 *پیش‌نمایش پیش‌نویس DANA*\n\n" + draft
-        sent = await msg.reply_text(text, parse_mode="Markdown", reply_markup=_preview_keyboard())
+        try:
+            sent = await msg.reply_text(text, parse_mode="Markdown", reply_markup=_preview_keyboard())
+        except Exception as e:
+            logger.warning("ارسال پیش‌نمایش با Markdown ناموفق (%s) — تلاش با متن کوتاه", e)
+            # Fallback: متن کوتاه بدون Markdown (framework خودش Markdown را حذف می‌کند)
+            short = text[:3500]
+            if len(text) > 3500:
+                short += "\n\n… (ادامه در فایل‌های پیوست)"
+            try:
+                sent = await msg.reply_text(short, reply_markup=_preview_keyboard())
+            except Exception:
+                logger.exception("ارسال پیش‌نمایش کوتاه هم ناموفق")
+                sent = await msg.reply_text(
+                    "📋 پیش‌نمایش آماده است — برای ادامه «تأیید و ثبت نهایی» را بزنید.",
+                    reply_markup=_preview_keyboard(),
+                )
         track_prompt(context, sent)
         return KN_PREVIEW
 
     except Exception:
         logger.exception("خطا در _save_and_preview دانش")
-        await msg.reply_text("❌ خطایی رخ داد.")
+        try:
+            await msg.reply_text("❌ خطایی رخ داد.")
+        except Exception:
+            pass
         return ConversationHandler.END
 
 
