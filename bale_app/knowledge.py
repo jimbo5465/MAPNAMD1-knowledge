@@ -22,6 +22,8 @@ import tempfile
 import jdatetime
 
 import config
+from bale import InputFile
+
 from db import models
 from db.models import (
     get_user_by_telegram_id,
@@ -1527,22 +1529,22 @@ async def kn_finish(update, context) -> int:
         chat_id = update.effective_chat.id
         if pdf_path and os.path.isfile(pdf_path):
             try:
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=pdf_path,
-                    caption=f"📄 پیش‌نویس DANA (PDF) — {number}",
-                    file_name=f"{number}.pdf",
-                )
+                with open(pdf_path, "rb") as fh:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=InputFile(fh.read(), file_name=f"{number}.pdf"),
+                        caption=f"📄 پیش‌نویس DANA (PDF) — {number}",
+                    )
             except Exception:
                 logger.exception("ارسال PDF دانش ناموفق")
         if docx_path and os.path.isfile(docx_path):
             try:
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=docx_path,
-                    caption=f"📝 پیش‌نویس DANA (Word) — {number}",
-                    file_name=f"{number}.docx",
-                )
+                with open(docx_path, "rb") as fh:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=InputFile(fh.read(), file_name=f"{number}.docx"),
+                        caption=f"📝 پیش‌نویس DANA (Word) — {number}",
+                    )
             except Exception:
                 logger.exception("ارسال DOCX دانش ناموفق")
 
