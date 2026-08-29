@@ -29,6 +29,56 @@ from engine.knowledge_tree import tree_as_yaml, validate_path
 
 logger = logging.getLogger(__name__)
 
+# بارگذاری واژه‌نامه تخصصی پروژه‌ها
+import os as _os
+
+_GLOSSARY_CACHE: dict[str, Any] | None = None
+
+
+def _get_glossary() -> dict[str, Any]:
+    global _GLOSSARY_CACHE
+    if _GLOSSARY_CACHE is not None:
+        return _GLOSSARY_CACHE
+    base_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    glossary_path = _os.path.join(base_dir, "references", "plant_glossary.json")
+    if not _os.path.isfile(glossary_path):
+        glossary_path = _os.path.join(base_dir, "plant_glossary.json")
+    if _os.path.isfile(glossary_path):
+        try:
+            with open(glossary_path, "r", encoding="utf-8") as fh:
+                _GLOSSARY_CACHE = json.load(fh)
+                return _GLOSSARY_CACHE
+        except Exception:
+            logger.exception("خطا در بارگذاری واژه‌نامه اصطلاحات")
+    _GLOSSARY_CACHE = {}
+    return _GLOSSARY_CACHE
+
+
+def _extract_relevant_glossary(project_name: str | None) -> str:
+    glossary = _get_glossary()
+    if not glossary:
+        return "واژه‌نامه تخصصی در دسترس نیست."
+    terms_list = []
+    for item in glossary.get("عمومی صنعت برق", [])[:30]:
+        terms_list.append(f"- {item['term_fa']} ({item['term_en']}): {item['description']}")
+    p_name = (project_name or "").lower()
+    cat = "نیروگاه سیکل ترکیبی"
+    if "بخار" in p_name or "حرارتی" in p_name or "بویلر" in p_name:
+        cat = "نیروگاه بخاری/حرارتی مقیاس بزرگ"
+    elif "دیزل" in p_name or "موتور" in p_name or "chp" in p_name or "مقیاس کوچک" in p_name:
+        cat = "نیروگاه مقیاس کوچک"
+    elif "آب‌شیرین" in p_name or "ro" in p_name:
+        cat = "تأسیسات آب‌شیرین‌کن"
+    elif "پست" in p_name or "انتقال" in p_name:
+        cat = "پست‌های انتقال و فوق‌توزیع برق"
+    elif "خورشید" in p_name:
+        cat = "نیروگاه خورشیدی"
+    elif "باد" in p_name:
+        cat = "نیروگاه بادی"
+    for item in glossary.get(cat, [])[:40]:
+        terms_list.append(f"- {item['term_fa']} ({item['term_en']}): {item['description']}")
+    return "\n".join(terms_list)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # فریمورک‌های مصاحبه — ترتیب پیشنهادی سؤال‌ها برای هر نوع
 # ══════════════════════════════════════════════════════════════════════════════
@@ -59,83 +109,68 @@ _MAX_JSON_RETRIES = 3
 # پرامپتهای سیستمی
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_interview_system_prompt(knowledge_type: str) -> str:
-    """
-    پرامپت سیستم برای مصاحبهٔ چندمرحلهای.
-    """
+def build_interview_system_prompt(
+    knowledge_type: str,
+    user_profile: dict | None = None,
+) -> str:
+    prof = user_profile or {}
+    user_name = prof.get("full_name") or prof.get("reporter_name") or "همکار گرامی"
+    user_position = prof.get("position") or prof.get("reporter_title") or "کارشناس/مهندس"
+    user_project = prof.get("project_name") or prof.get("project") or "پروژه‌های مپنا توسعه یک"
+
     type_label = TYPE_LABELS.get(knowledge_type, knowledge_type)
-    fields_list = INTERVIEW_FRAMEWORKS.get(knowledge_type, [])
-    fields_lines = "\n".join(
-        f'- "{k}": {FIELD_SCHEMAS.get(knowledge_type, {}).get(k, k)}'
-        for k in fields_list if k in FIELD_SCHEMAS.get(knowledge_type, {})
-    )
+    fields_info = FIELD_SCHEMAS.get(knowledge_type, {})
+    fields_text = "\n".join(f'- "{k}": {desc}' for k, desc in fields_info.items())
+    glossary_subset = _extract_relevant_glossary(user_project)
+
     button_lines = ""
     btn_map = BUTTON_FIELDS.get(knowledge_type, {})
     for k, options in btn_map.items():
-        button_lines += (
-            f"\nکلید ویژهٔ «{k}»: یکی از {options} (نه متن آزاد)"
-        )
+        button_lines += f"\nکلید ویژهٔ «{k}»: یکی از {options} (نه متن آزاد)"
 
-    # فیلدهای الزامی فرم رسمی DANA — لنگرگاه مصاحبه
     dana_required: dict[str, str] = {
         "lesson": "شرح درس آموخته (ترکیب زمینه/مشکل/اقدام/درس) و نتیجه اجرا",
-        "suggestion": (
-            "وضع موجود، پیشنهاد بهبود، تاثیر اجرای پیشنهاد (کیفی/کمی)، "
-            "و نتایج حاصل از اجرای پیشنهاد (که همان اثر مورد انتظار است)"
-        ),
+        "suggestion": "وضع موجود، پیشنهاد بهبود، تاثیر اجرای پیشنهاد (کیفی/کمی)، و نتایج حاصل از اجرای پیشنهاد",
         "explicit": "عنوان و شرح کامل منبع",
     }
-    required_line = dana_required.get(
-        knowledge_type, "فیلدهای کلیدی این نوع دانش"
-    )
+    required_line = dana_required.get(knowledge_type, "فیلدهای کلیدی این نوع دانش")
 
-    return f"""تو یک مصاحبه‌گر دانش سازمانی هستی. یک اپراتور باتجربه در یک سایت
-صنعتی (نیروگاه، پالایشگاه، کارخانه) پیش روی توست.
-وظیفهٔ تو: کمک به او برای پر کردن «فرم رسمی ثبت دانش در سامانه دانا (DANA)».
-هدف نهایی: ثبت این دانش در دانا؛ بنابراین مصاحبه باید اطلاعات لازم برای
-فیلدهای رسمی فرم را جمع کند.
+    return f"""تو «دستیار مصاحبه‌گر مدیریت دانش شرکت مپنا توسعه یک (MAPNA MD1)» هستی.
+طرف مصاحبه تو یکی از مهندسان مجرب شرکت در کارگاه یا سایت اجرایی است.
 
-نوع دانش: {type_label}
+مشخصات همکار مصاحبه‌شونده:
+- نام: {user_name}
+- سمت: {user_position}
+- پروژه/محل خدمت: {user_project}
+
+نوع دانش در حال مصاحبه: {type_label}
+
+واژه‌نامه و اصطلاحات فنی مجاز نیروگاهی/صنعتی:
+{glossary_subset}
+
+فیلدهای رسمی سامانه دانا که باید در این مصاحبه تکمیل شوند:
+{fields_text}
+{button_lines}
 
 ⚠️ فیلدهای الزامی فرم دانا که حتماً باید پوشش داده شوند:
 {required_line}
 («بذر پیشنهاد» جزو سؤالات تو نیست — طبق فرم دانا خالی میماند.)
 
-فیلدهایی که باید پر شوند:
-{fields_lines}
-{button_lines}
+قوانین حیاتی مصاحبه:
+۱. ادبیات تو صمیمانه، محترمانه، فنی و دقیقاً متناسب با فضای کارگاهی سایت است.
+۲. در هر پیام فقط و فقط «یک سؤال شفاف و کوتاه» بپرس.
+۳. قاعده تفکیک درس‌آموخته از پیشنهاد: اگر مصاحبه‌شونده بیان کرد اقدامی «انجام شد» → «درس‌آموخته» است؛ اگر نوع فعلی پیشنهاد است ولی از اتفاق اجراشده می‌گوید، switch_to_type را "lesson" قرار بده.
+۴. هرگز شماره تجهیز را به تجهیز دیگر نسبت نده.
+۵. هر زمان فیلدهای حیاتی پر شدند، done را true کن.
 
-رفتار:
-1. در هر نوبت فقط یک سؤال کوتاه و دقیق بپرس.
-2. سؤال‌ها باید به زبان فارسی و متناسب با زبان صنعتی باشند.
-3. اگر پاسخ کاربر اطلاعات چند فیلد را پوشش داد، همه را در extracted بنویس.
-5. اگر چیزی مبهم مانده، سؤال روشن‌کننده بپرس (نه سؤال جدید).
-6. زمانی done: true برگردان که حداقل همهٔ فیلدهای متنی پر شده باشند.
-
-خروجی: فقط یک شیوهٔ JSON خالص (بدون backtick، بدون توضیح اضافه).
-هر نوبت یکی از سه شکل:
-
-1) پاسخ کاربر اطلاعاتی داد:
+خروجی JSON:
 {{
-  "extracted": {{"<key>": "<value>", ...}},
-  "ask": "<سؤال بعدی یا خاتمه>"
+  "extracted": {{"<field_key>": "<مقدار>"}},
+  "switch_to_type": "<lesson|suggestion|explicit|null>",
+  "ask": "<سؤال بعدی>",
+  "done": false
 }}
-
-2) سؤال روشن‌کننده:
-{{"ask": "<سؤال توضیحی>"}}
-
-3) پایان مصاحبه:
-{{
-  "done": true,
-  "fields": {{<همهٔ فیلدهای پرشده>}},
-  "title": "<پیشنهاد عنوان کوتاه>",
-  "summary": "<یک‌خط خلاصه برای تأیید کاربر>"
-}}
-
-قواعد:
-- فقط از کلیدهای مجاز در فیلدها استفاده کن.
-- مقادیر فارسی، طبیعی، خلاصه (۲ تا ۴ جمله).
-- هیچ‌وقت فیلدی را حدس نزن."""
+پایان: {{"done": true, "fields": {{...}}, "title": "...", "summary": "..."}}"""
 
 
 def build_polish_system_prompt() -> str:
@@ -279,38 +314,29 @@ async def interview_next_turn(
     knowledge_type: str,
     history: list[dict],
     user_message: str,
+    user_profile: dict | None = None,
 ) -> dict:
     """
-    یک نوبت مکالمه با LLM.
+    یک نوبت مکالمه با LLM — با پشتیبانی پروفایل مصاحبه‌شونده و تشخیص تغییر نوع دانش.
 
     ورودی:
         knowledge_type: 'lesson' | 'suggestion' | 'explicit'
-        history: لیست قبلی پیامها به شکل [{"{"role: 'assistant'|'user', content: str"}, ...}]
+        history: لیست قبلی پیامها
         user_message: آخرین پیام اپراتور
+        user_profile: دیکشنری پروفایل (full_name/position/project_name) برای شخصی‌سازی پرامپت
 
-    خروجی:
-        {
-            "extracted": dict[key, value] | None  — فیلدهای استخراج‌شده از این پاسخ
-            "ask": str | None                       — سؤال بعدی برای کاربر
-            "done": bool                            — آیا مصاحبه تمام شد؟
-            "title": str | None                     — پیشنهاد عنوان (اگر done)
-            "summary": str | None                   — خلاصه برای تأیید (اگر done)
-            "fields": dict | None                   — همهٔ فیلدها (اگر done)
-            "error": str | None                     — نوع خطا در صورت شکست
-        }
-
-    اگر AI در دسترس نباشد:
-        خروجی = {extracted: None, ask: None, done: False, error: "ai_disabled"}
+    خروجی: مانند قبل + کلید "switch_to_type" برای پیشنهاد تغییر نوع دانش
     """
     if not is_ai_enabled():
         logger.info("AI غیرفعال — مصاحبه در حالت مکانیکی")
         return {
             "extracted": None, "ask": None, "done": False,
             "title": None, "summary": None, "fields": None,
+            "switch_to_type": None,
             "error": "ai_disabled",
         }
 
-    system = build_interview_system_prompt(knowledge_type)
+    system = build_interview_system_prompt(knowledge_type, user_profile)
     messages: list[dict] = [{"role": "system", "content": system}]
     for entry in history:
         role = entry.get("role")
@@ -322,36 +348,26 @@ async def interview_next_turn(
     parsed = await _call_llm_json(messages)
     if not parsed:
         return {
-            "extracted": None, "ask": None, "done": False,
-            "title": None, "summary": None, "fields": None,
+            "extracted": None,
+            "ask": "پاسخ دریافت نشد؛ لطفاً دوباره بفرمایید یا پایان مصاحبه را بزنید.",
+            "done": False,
+            "title": None,
+            "summary": None,
+            "fields": None,
+            "switch_to_type": None,
             "error": "llm_failed",
         }
 
-    result = _normalize_interview_response(parsed)
-
-    # اگر AI سؤالی نساخت (پاسخ خالی/ناقص)، از فیلدهای پرشده‌نشده سؤال هدفمند بساز
-    if not result.get("ask"):
-        # فیلدهای پر شده تا الان (از تاریخچه استخراج نشده‌اند — از پارس پاسخها)
-        # بهتر: از روی فیلدهای ناقص فریمورک، سؤال بعدی را پیشنهاد بده
-        filled = set()
-        for entry in history:
-            content = entry.get("content") or ""
-            if entry.get("role") == "assistant" and "extracted" in content:
-                continue
-        # از آخرین پاسخ استخراج‌شده استفاده کن
-        last_extracted = result.get("extracted") or {}
-        for k in last_extracted:
-            filled.add(k)
-        # فیلدهای باقی‌مانده از فریمورک
-        fields_framework = INTERVIEW_FRAMEWORKS.get(knowledge_type, [])
-        remaining = [k for k in fields_framework if k not in filled]
-        if remaining:
-            next_key = remaining[0]
-            label = FIELD_SCHEMAS.get(knowledge_type, {}).get(next_key, next_key)
-            result["ask"] = f"لطفاً «{label}» را توضیح دهید:"
-        else:
-            result["ask"] = "به نظر می‌رسد همهٔ فیلدهای کلیدی پر شده‌اند. اگر مورد دیگری هست بگویید، یا «✓ پایان مصاحبه» را بزنید."
-    return result
+    return {
+        "extracted": parsed.get("extracted") if isinstance(parsed.get("extracted"), dict) else {},
+        "switch_to_type": parsed.get("switch_to_type"),
+        "ask": parsed.get("ask"),
+        "done": bool(parsed.get("done")),
+        "title": parsed.get("title"),
+        "summary": parsed.get("summary"),
+        "fields": parsed.get("fields") if isinstance(parsed.get("fields"), dict) else None,
+        "error": None,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════

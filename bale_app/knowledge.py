@@ -870,6 +870,19 @@ async def kn_type(update, context) -> int:
         )
         return ConversationHandler.END
     context.user_data["kn_type"] = value
+    # پروفایل برای شخصی‌سازی مصاحبه (نام/سمت/پروژه)
+    try:
+        u = get_user_by_telegram_id(update.effective_user.id) or {}
+        context.user_data["kn_user_profile"] = u
+        # پیش‌پر کردن نام/سمت اگر هنوز پرسیده نشده
+        if not context.user_data.get("kn_reporter_name"):
+            context.user_data["kn_reporter_name"] = u.get("full_name") or ""
+        if not context.user_data.get("kn_reporter_title"):
+            context.user_data["kn_reporter_title"] = u.get("position") or ""
+        if u.get("project_name"):
+            context.user_data.setdefault("kn_org_metadata", {})["project"] = u.get("project_name")
+    except Exception:
+        logger.exception("خواندن پروفایل برای مصاحبه ناموفق")
 
     # مسیر بر اساس روش انتخابی
     if context.user_data.get("kn_mode") == "interview":
@@ -1602,9 +1615,18 @@ async def _ask_first_interview_question(
     from engine.knowledge_interview import interview_next_turn
 
     history = context.user_data.setdefault("kn_interview_history", [])
+    # پروفایل برای شخصی‌سازی پرامپت (نام/سمت/پروژه)
+    prof = context.user_data.get("kn_user_profile")
+    if not prof:
+        # fallback از داده‌های گزارش‌دهنده
+        prof = {
+            "full_name": context.user_data.get("kn_reporter_name"),
+            "position": context.user_data.get("kn_reporter_title"),
+            "project_name": (context.user_data.get("kn_org_metadata") or {}).get("project"),
+        }
     # اولین نوبت: پیام کاربر خالی/آغازین تا AI سؤال اول را بدهد
     result = await interview_next_turn(
-        context.user_data["kn_type"], history, "(شروع مصاحبه)"
+        context.user_data["kn_type"], history, "(شروع مصاحبه)", prof
     )
 
     if result.get("error") == "ai_disabled":
@@ -1666,8 +1688,22 @@ async def kn_interview_loop_text(update, context) -> int:
         # ثبت پاسخ کاربر در تاریخچه
         history.append({"role": "user", "content": user_text})
 
+        # پروفایل برای پرامپت شخصی‌سازی
+        prof = context.user_data.get("kn_user_profile")
+        if not prof:
+            prof = {
+                "full_name": context.user_data.get("kn_reporter_name"),
+                "position": context.user_data.get("kn_reporter_title"),
+                "project_name": (context.user_data.get("kn_org_metadata") or {}).get("project"),
+            }
+
         # فراخوانی AI
-        result = await interview_next_turn(knowledge_type, history, user_text)
+        result = await interview_next_turn(knowledge_type, history, user_text, prof)
+
+        # اگر AI تشخیص داد نوع دانش باید عوض شود
+        if result.get("switch_to_type") and result["switch_to_type"] != knowledge_type:
+            context.user_data["kn_type"] = result["switch_to_type"]
+            knowledge_type = result["switch_to_type"]
 
         # ثبت تاریخچه + فیلدها در DB برای resume
         kid = context.user_data.get(_KEY_ENTRY_ID)

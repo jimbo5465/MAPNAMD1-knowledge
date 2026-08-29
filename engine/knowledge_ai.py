@@ -115,6 +115,11 @@ def order_fields_by_priority(knowledge_type: str, keys: list[str]) -> list[str]:
     max_rank = 3000
     return sorted(keys, key=lambda k: rank.get(k, max_rank))
 
+
+def get_ordered_field_keys(knowledge_type: str) -> list[str]:
+    """فهرست مرتب‌شده کلیدهای فیلدها بر اساس اهمیت فرم دانا (سازگار با نام جدید)."""
+    return order_fields_by_priority(knowledge_type, list(FIELD_SCHEMAS.get(knowledge_type, {}).keys()))
+
 _MAX_DESCRIPTION_LEN = 4000
 
 
@@ -407,6 +412,7 @@ async def _call_llm_messages(
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {prov['api_key']}"}
 
