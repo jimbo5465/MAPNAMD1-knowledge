@@ -2447,6 +2447,26 @@ async def kn_tree_pick_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return KN_TREE
 
 
+async def kn_tree_nav_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """callback_data: kn_tree:nav — نمایش سطح ریشه درخت."""
+    try:
+        query = update.callback_query
+        await query.answer()
+        from engine.knowledge_tree import KNOWLEDGE_TREE
+        children = list(KNOWLEDGE_TREE.keys())
+        context.user_data["kn_tree_current_path"] = []
+        kb = _tree_drill_keyboard(0, [], children)
+        await query.edit_message_text(
+            "🌳 *انتخاب دستی از درخت — سطح ریشه*\n\nیکی را انتخاب کنید:",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+        return KN_TREE
+    except Exception:
+        logger.exception("خطا در kn_tree_nav_start")
+        return KN_TREE
+
+
 async def kn_tree_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """callback_data: kn_tree:nav:<level>:<idx> — رفتن به فرزند idx در سطح level."""
     try:
@@ -3161,6 +3181,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_tree_ai, pattern=r"^kn_tree:ai$"),
                 CallbackQueryHandler(kn_tree_ai_pick, pattern=r"^kn_tree:ai:pick:\d+$"),
                 CallbackQueryHandler(kn_tree_nav_back, pattern=r"^kn_tree:nav:back$"),
+                CallbackQueryHandler(kn_tree_nav_start, pattern=r"^kn_tree:nav$"),
                 CallbackQueryHandler(kn_tree_nav, pattern=r"^kn_tree:nav:\d+:\d+$"),
                 CallbackQueryHandler(kn_tree_confirm, pattern=r"^kn_tree:confirm$"),
                 CallbackQueryHandler(kn_tree_skip, pattern=r"^kn_tree:skip$"),
