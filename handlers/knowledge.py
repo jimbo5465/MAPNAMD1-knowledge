@@ -107,11 +107,12 @@ async def _prompt_reply(target, context, text, reply_markup=None):
     KN_FIELD_EDIT,         # ویرایش یک فیلد از preview
     KN_PHOTOS,             # عکس/مدرک
     KN_DATE,               # تاریخ ثبت
+    KN_FIELD_DIRECT,       # پرسش مستقیم فیلدهای دانا (دستیِ خالصِ بدون AI)
     KN_FINISH,             # ثبت نهایی + ساخت PDF/DOCX + ارسال
     KN_TYPE_CONFIRM,       # تأیید نوع پس از پیشنهاد AI (تعارض طبقه‌بندی)
     KN_ARCHIVE_LIST,       # بایگانی دانش — لیست صفحه‌بندی‌شده/نتایج جستجو
     KN_SEARCH_INPUT,       # دریافت عبارت جستجو در دانش‌ها
-) = range(19)
+) = range(20)
 
 _KEY_ENTRY_ID = "kn_entry_id"
 
@@ -319,19 +320,20 @@ AUDIO_MESSAGE_FILTER = _AudioMessageFilter()
 
 def _mode_select_keyboard(ai_available: bool) -> InlineKeyboardMarkup:
     """زیرمنوی انتخاب روش ثبت دانش."""
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(
-            "✍️ ثبت دستی — دانش آماده است",
-            callback_data="kn_mode:manual",
-        )],
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
     if ai_available:
         rows.append([
             InlineKeyboardButton(
-                "🎙️ مصاحبه با AI — از صفر شروع میکنیم",
+                "🎙️ مصاحبه با هوش مصنوعی (پیشنهادی)",
                 callback_data="kn_mode:interview",
             )
         ])
+    rows.append([
+        InlineKeyboardButton(
+            "📋 ثبت مستقیم فرمی (بدون AI / سریع)",
+            callback_data="kn_mode:direct",
+        )
+    ])
     rows.append([InlineKeyboardButton("🏠 منو", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -709,17 +711,20 @@ async def kn_resume_no(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def kn_mode_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """callback_data: kn_mode:manual — روش دستت: شرح آماده → AI → فیلدهای ناقص."""
+    """callback_data: kn_mode:manual — سازگاری با نسخه قدیم → دستیِ خالص"""
+    return await kn_mode_direct(update, context)
+
+
+async def kn_mode_direct(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """callback_data: kn_mode:direct — ثبت مستقیم فرمی بدون AI."""
     try:
         query = update.callback_query
         await query.answer()
-        context.user_data["kn_mode"] = "manual"
+        context.user_data["kn_mode"] = "direct"
         await query.edit_message_text(
-            "✍️ *روش دستی*\n\n"
-            "در این روش شما متن آمادهٔ تجربه/دانش خود را وارد میکنید؛ ربات آن را "
-            "به فیلدهای DANA تبدیل میکند و فیلدهای ناقص را جداگانه میپرسد.\n\n"
-            "🎙️ *راهنما:* میتوانید بهجای تایپ، ویس بفرستید — فارسی صحبت کنید و "
-            "صدای شما توسط هوش مصنوعی به متن تبدیل میشود.\n\n"
+            "📋 *ثبت مستقیم فرمی (بدون هوش مصنوعی)*\n\n"
+            "در این روش تمام فیلدهای فرم دانا را قدم‌به‌قدم از شما می‌پرسم — "
+            "بدون نیاز به هوش مصنوعی.\n\n"
             "📚 نوع دانش را انتخاب کنید:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(_type_buttons()),
@@ -727,7 +732,7 @@ async def kn_mode_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return KN_TYPE
 
     except Exception:
-        logger.exception("خطا در kn_mode_manual")
+        logger.exception("خطا در kn_mode_direct")
         return ConversationHandler.END
 
 
@@ -920,7 +925,18 @@ async def kn_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return KN_INTERVIEW_FRAMEWORK
 
-    # روش دستی: همان فلوی فعلی
+    # روش دستیِ خالصِ بدون AI — دقیقاً مطابق فرم دانا
+    if context.user_data.get("kn_mode") in ("direct", "manual"):
+        from engine.knowledge_ai import MANUAL_DIRECT_QUESTIONS
+        context.user_data["kn_direct_keys"] = [q["key"] for q in MANUAL_DIRECT_QUESTIONS.get(value, [])]
+        context.user_data["kn_direct_questions"] = MANUAL_DIRECT_QUESTIONS.get(value, [])
+        context.user_data["kn_fields"] = {}
+        context.user_data.pop("kn_polished", None)
+        if value == "lesson":
+            context.user_data.pop("kn_title", None)
+        return await _ask_next_direct_field(update.callback_query.message, context)
+
+    # روش دستی قدیم (هیبریدی با AI) — برای سازگاری
     await update.callback_query.edit_message_text(
         f"نوع: *{TYPE_LABELS[value]}*\n\n"
         "✍️ تجربه/دانش خود را آزادانه شرح دهید — هرچه جزئیات بیشتر باشد "
@@ -931,6 +947,100 @@ async def kn_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         parse_mode="Markdown",
     )
     return KN_DESCRIPTION
+
+
+# ── دستیِ خالصِ بدون AI — پرسش مستقیم فیلدهای دانا ────────────────────────
+
+async def _ask_next_direct_field(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """سؤال بعدی دستیِ خالص را می‌پرسد؛ اگر تمام شد به عکس‌ها می‌رود."""
+    from engine.knowledge_ai import MANUAL_DIRECT_QUESTIONS
+
+    keys = context.user_data.get("kn_direct_keys", [])
+    questions = {q["key"]: q for q in MANUAL_DIRECT_QUESTIONS.get(context.user_data.get("kn_type", ""), [])}
+
+    if not keys:
+        return await _open_photos(msg, context)
+
+    curr_key = keys[0]
+    q = questions.get(curr_key, {})
+    label = q.get("label", curr_key)
+    help_text = q.get("help", "")
+    required = q.get("required", True)
+    is_button = q.get("is_button", False)
+
+    if is_button:
+        from engine.knowledge_ai import BUTTON_FIELDS
+        k_type = context.user_data.get("kn_type", "")
+        opts = BUTTON_FIELDS.get(k_type, {}).get(curr_key, q.get("options", []))
+        rows = [[InlineKeyboardButton(opt, callback_data=f"kn_direct:btn:{opt}")] for opt in opts]
+        rows.append([InlineKeyboardButton("⏭ رد کردن", callback_data="kn_direct:skip")])
+        kb = InlineKeyboardMarkup(rows)
+        await _prompt_reply(
+            msg, context,
+            f"*{label}*{' *' if required else ''}\n\n{help_text}",
+            reply_markup=kb,
+        )
+        return KN_FIELD_DIRECT
+
+    kb = None
+    if not required:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⏭ رد کردن", callback_data="kn_direct:skip")]])
+    await _prompt_reply(
+        msg, context,
+        f"*{label}*{' *' if required else ''}\n\n{help_text}\n\nلطفاً پاسخ را بنویسید:",
+        reply_markup=kb,
+    )
+    return KN_FIELD_DIRECT
+
+
+async def kn_field_direct_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """پاسخ متنی به سؤال دستیِ خالص."""
+    text = (update.message.text or "").strip()
+    keys = context.user_data.get("kn_direct_keys", [])
+    if not keys:
+        return await _ask_next_direct_field(update.message, context)
+
+    curr_key = keys.pop(0)
+    context.user_data["kn_direct_keys"] = keys
+
+    if curr_key == "kn_title":
+        context.user_data["kn_title"] = text
+    elif curr_key == "lesson_description":
+        context.user_data.setdefault("kn_polished", {})["polished_description"] = text
+        context.user_data.setdefault("kn_fields", {})["lesson"] = text[:500]
+    elif curr_key in ("impact_type", "subtype"):
+        pass
+    else:
+        context.user_data.setdefault("kn_fields", {})[curr_key] = text
+
+    return await _ask_next_direct_field(update.message, context)
+
+
+async def kn_field_direct_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """رد کردن فیلد اختیاری دستیِ خالص."""
+    await update.callback_query.answer()
+    keys = context.user_data.get("kn_direct_keys", [])
+    if keys:
+        keys.pop(0)
+        context.user_data["kn_direct_keys"] = keys
+    return await _ask_next_direct_field(update.callback_query.message, context)
+
+
+async def kn_direct_btn_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """انتخاب دکمه‌ای در دستیِ خالص (impact_type / subtype)."""
+    await update.callback_query.answer()
+    value = update.callback_query.data.split(":", 2)[2]
+    keys = context.user_data.get("kn_direct_keys", [])
+    if keys:
+        curr_key = keys.pop(0)
+        context.user_data["kn_direct_keys"] = keys
+        if curr_key == "impact_type":
+            context.user_data["kn_impact_type"] = value
+        elif curr_key == "subtype":
+            context.user_data.setdefault("kn_fields", {})["subtype"] = value
+        else:
+            context.user_data.setdefault("kn_fields", {})[curr_key] = value
+    return await _ask_next_direct_field(update.callback_query.message, context)
 
 
 @_busy_ai
@@ -1136,13 +1246,24 @@ async def kn_field_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def _open_photos(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """مرحلهٔ عکس‌ها (اختیاری)."""
+    """مرحلهٔ عکس‌ها (اختیاری) — برای دانش صریح پیام ویژه دارد."""
     photos = context.user_data.setdefault("kn_photos", [])
     count_text = f" ({len(photos)} عکس ثبت شد)" if photos else ""
+    k_type = context.user_data.get("kn_type")
+    if k_type == "explicit":
+        prompt = (
+            "📎 *عکس، متن، PDF یا صدای خود را بارگذاری کنید*\n\n"
+            "فایل دانش صریح خود را بفرستید (اختیاری — می‌توانید چند فایل بفرستید).\n"
+            f"بعد از اتمام، «پایان عکس‌ها» را بزنید.{count_text}"
+        )
+    else:
+        prompt = (
+            "📸 عکس‌های مرتبط با تجربه را بفرستید (اختیاری، چندتایی هم می‌توانید).\n"
+            f"بعد از اتمام، دکمهٔ «پایان عکس‌ها» را بزنید.{count_text}"
+        )
     await prompt_reply(
         msg, context,
-        "📸 عکس‌های مرتبط با تجربه را بفرستید (اختیاری، چندتایی هم می‌توانید).\n"
-        f"بعد از اتمام، دکمهٔ «پایان عکس‌ها» را بزنید.{count_text}",
+        prompt,
         reply_markup=_photos_done_keyboard(),
     )
     context.user_data["kn_attach_cleaned"] = False
@@ -2029,21 +2150,85 @@ async def kn_org_hashtags(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return KN_ORG_META
 
 
+_SCOPE_OPTIONS = [
+    "طراحی و مهندسی",
+    "امور نیرو و بهره‌وری انرژی",
+    "امور نیرو، تولید پراکنده و مقیاس متوسط",
+    "امور نیرو و ساختمان‌های انرژی محور",
+    "امور نیرو، توزیع و انتقال",
+    "برنامه‌ریزی و انفورماتیک",
+    "تامین",
+    "بازاریابی و فروش",
+    "حسابرسی داخلی",
+    "سیستم‌ها و کیفیت",
+    "مالی اقتصادی",
+    "منابع انسانی",
+]
+
+
 async def kn_org_scope(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         query = update.callback_query
         await query.answer()
-        context.user_data["kn_org_pending_field"] = "scope"
         current = (context.user_data.get("kn_org_metadata") or {}).get("scope", "")
+        rows: list[list[InlineKeyboardButton]] = []
+        pair: list[InlineKeyboardButton] = []
+        for opt in _SCOPE_OPTIONS:
+            pair.append(InlineKeyboardButton(opt, callback_data=f"kn_org:scope_pick:{opt}"))
+            if len(pair) == 2:
+                rows.append(pair)
+                pair = []
+        if pair:
+            rows.append(pair)
+        rows.append([InlineKeyboardButton("✏️ تایپ دستی", callback_data="kn_org:scope_type")])
+        rows.append([InlineKeyboardButton("↩️ بازگشت", callback_data="kn_org:back")])
         await query.edit_message_text(
-            f"🏢 *محدوده سازمانی*\n\n"
+            f"🏢 *محدوده سازمانی (حیطه)*\n\n"
             f"مقدار فعلی: `{current or 'خالی'}`\n\n"
-            "این دانش به کدام بخشهای سازمان مربوط است؟",
+            "یکی از گزینه‌ها را انتخاب کنید یا «تایپ دستی» را بزنید:",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows),
         )
         return KN_ORG_META
     except Exception:
         logger.exception("خطا در kn_org_scope")
+        return KN_ORG_META
+
+
+async def kn_org_scope_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """انتخاب حیطه از لیست ۱۲ گزینه‌ای."""
+    try:
+        query = update.callback_query
+        await query.answer()
+        value = query.data.split(":", 2)[2]
+        org = context.user_data.setdefault("kn_org_metadata", {})
+        org["scope"] = value
+        kid = context.user_data.get(_KEY_ENTRY_ID)
+        if kid:
+            try:
+                models.set_knowledge_org_metadata(kid, org)
+            except Exception:
+                logger.exception("ذخیرهٔ scope ناموفق")
+        await query.edit_message_text(f"✓ حیطه ثبت شد: {value}")
+        return await _show_org_menu(update, context)
+    except Exception:
+        logger.exception("خطا در kn_org_scope_pick")
+        return KN_ORG_META
+
+
+async def kn_org_scope_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """حالت تایپ دستی برای حیطه."""
+    try:
+        query = update.callback_query
+        await query.answer()
+        context.user_data["kn_org_pending_field"] = "scope"
+        await query.edit_message_text(
+            "🏢 *محدوده سازمانی*\n\nمقدار را تایپ کنید:",
+            parse_mode="Markdown",
+        )
+        return KN_ORG_META
+    except Exception:
+        logger.exception("خطا در kn_org_scope_type")
         return KN_ORG_META
 
 
@@ -2912,6 +3097,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_resume_yes, pattern=r"^kn_resume:yes$"),
                 CallbackQueryHandler(kn_resume_no, pattern=r"^kn_resume:no$"),
                 CallbackQueryHandler(kn_mode_manual, pattern=r"^kn_mode:manual$"),
+                CallbackQueryHandler(kn_mode_direct, pattern=r"^kn_mode:direct$"),
                 CallbackQueryHandler(kn_mode_interview, pattern=r"^kn_mode:interview$"),
             ],
             KN_TYPE: [
@@ -2940,6 +3126,12 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_field_skip, pattern=r"^kn_skip_field$"),
                 CallbackQueryHandler(kn_impact, pattern=r"^kn_impact:(کیفی|کمی)$"),
             ],
+            KN_FIELD_DIRECT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, kn_field_direct_input),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_field_direct_input)),
+                CallbackQueryHandler(kn_field_direct_skip, pattern=r"^kn_direct:skip$"),
+                CallbackQueryHandler(kn_direct_btn_choice, pattern=r"^kn_direct:btn:.+$"),
+            ],
             KN_INTERVIEW_FRAMEWORK: [
                 CallbackQueryHandler(kn_interview_start, pattern=r"^kn_interview:start$"),
             ],
@@ -2958,6 +3150,9 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_org_colleagues, pattern=r"^kn_org:colleagues$"),
                 CallbackQueryHandler(kn_org_hashtags, pattern=r"^kn_org:hashtags$"),
                 CallbackQueryHandler(kn_org_scope, pattern=r"^kn_org:scope$"),
+                CallbackQueryHandler(kn_org_scope_pick, pattern=r"^kn_org:scope_pick:.+$"),
+                CallbackQueryHandler(kn_org_scope_type, pattern=r"^kn_org:scope_type$"),
+                CallbackQueryHandler(_show_org_menu, pattern=r"^kn_org:back$"),
                 CallbackQueryHandler(kn_org_done, pattern=r"^kn_org:done$"),
                 CallbackQueryHandler(kn_org_skip, pattern=r"^kn_org:skip$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_org_text_input),
