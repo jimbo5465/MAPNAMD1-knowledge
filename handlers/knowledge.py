@@ -2043,20 +2043,23 @@ async def kn_org_tree(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         query = update.callback_query
         await query.answer()
 
-        # ابتدا سعی میکنیم پیشنهادهای AI را بگیریم
-        knowledge_type = context.user_data.get("kn_type")
-        fields = context.user_data.get("kn_fields") or {}
-        title = context.user_data.get("kn_title")
-        raw_desc = context.user_data.get("kn_description") or ""
-
-        suggestions: list[dict] = []
-        try:
-            from engine.knowledge_interview import suggest_tree_paths
-            suggestions = await suggest_tree_paths(
-                knowledge_type, fields, raw_desc, title, top_k=3,
-            )
-        except Exception:
-            logger.exception("خطا در گرفتن پیشنهاد درخت")
+        # دستیِ خالص بدون AI — پیشنهاد AI نده
+        if context.user_data.get("kn_mode") in ("direct", "manual"):
+            suggestions: list[dict] = []
+            knowledge_type = context.user_data.get("kn_type", "")
+        else:
+            knowledge_type = context.user_data.get("kn_type")
+            fields = context.user_data.get("kn_fields") or {}
+            title = context.user_data.get("kn_title")
+            raw_desc = context.user_data.get("kn_description") or ""
+            suggestions: list[dict] = []
+            try:
+                from engine.knowledge_interview import suggest_tree_paths
+                suggestions = await suggest_tree_paths(
+                    knowledge_type, fields, raw_desc, title, top_k=3,
+                )
+            except Exception:
+                logger.exception("خطا در گرفتن پیشنهاد درخت")
 
         context.user_data["kn_tree_suggestions"] = suggestions
 
