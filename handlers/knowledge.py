@@ -462,7 +462,6 @@ def _tree_mode_keyboard(ai_suggestions: list[dict]) -> InlineKeyboardMarkup:
         )])
     rows.append([
         InlineKeyboardButton("🔍 انتخاب دستی از درخت", callback_data="kn_tree:nav"),
-        InlineKeyboardButton("✏️ تایپ مسیر کامل", callback_data="kn_tree:type"),
     ])
     rows.append([InlineKeyboardButton("⏭ بعداً در DANA", callback_data="kn_tree:skip")])
     return InlineKeyboardMarkup(rows)
@@ -3164,11 +3163,8 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_tree_nav_back, pattern=r"^kn_tree:nav:back$"),
                 CallbackQueryHandler(kn_tree_nav, pattern=r"^kn_tree:nav:\d+:\d+$"),
                 CallbackQueryHandler(kn_tree_confirm, pattern=r"^kn_tree:confirm$"),
-                CallbackQueryHandler(kn_tree_type, pattern=r"^kn_tree:type$"),
                 CallbackQueryHandler(kn_tree_skip, pattern=r"^kn_tree:skip$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_tree_pick_text),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, kn_tree_type_done),
-                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_tree_type_done)),
             ],
             KN_PREVIEW: [
                 CallbackQueryHandler(kn_finish, pattern=r"^kn_finish$"),
