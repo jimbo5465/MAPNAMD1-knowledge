@@ -982,7 +982,10 @@ async def _ask_next_direct_field(msg, context) -> int:
 
 async def kn_field_direct_input(update, context) -> int:
     """پاسخ متنی به سؤال دستیِ خالص."""
-    text = (update.message.text or "").strip()
+    text = _input_text(update, context).strip()
+    if not text:
+        await _prompt_reply(update.message, context, "❌ متن خالی است. دوباره بنویسید:")
+        return KN_FIELD_DIRECT
     keys = context.user_data.get("kn_direct_keys", [])
     if not keys:
         return await _ask_next_direct_field(update.message, context)
@@ -1828,13 +1831,31 @@ async def kn_interview_loop_text(update, context) -> int:
         # فراخوانی AI
         result = await interview_next_turn(knowledge_type, history, user_text, prof)
 
-        # اگر AI تشخیص داد نوع دانش باید عوض شود
-        if result.get("switch_to_type") and result["switch_to_type"] != knowledge_type:
-            context.user_data["kn_type"] = result["switch_to_type"]
-            knowledge_type = result["switch_to_type"]
+        kid = context.user_data.get(_KEY_ENTRY_ID)
+
+        # اگر AI تشخیص داد نوع دانش باید عوض شود — به کاربر اطلاع بده و DB را هم به‌روز کن
+        if result.get("switch_to_type") and result["switch_to_type"] in ("lesson", "suggestion", "explicit") and result["switch_to_type"] != knowledge_type:
+            from engine.knowledge_ai import TYPE_LABELS as _TL
+            old_label = _TL.get(knowledge_type, knowledge_type)
+            new_type = result["switch_to_type"]
+            new_label = _TL.get(new_type, new_type)
+            context.user_data["kn_type"] = new_type
+            knowledge_type = new_type
+            if kid:
+                try:
+                    models.update_knowledge_type(kid, new_type)
+                except Exception:
+                    logger.exception("به‌روزرسانی knowledge_type ناموفق")
+            try:
+                await _prompt_reply(
+                    update.message, context,
+                    f"⚠️ با توجه به توضیحات شما، این مورد بیشتر به *{new_label}* شباهت دارد تا *{old_label}*.\n"
+                    f"نوع دانش به *{new_label}* تغییر کرد و ادامه مصاحبه بر اساس همان پیش می‌رود.",
+                )
+            except Exception:
+                logger.exception("ارسال پیام تغییر نوع ناموفق")
 
         # ثبت تاریخچه + فیلدها در DB برای resume
-        kid = context.user_data.get(_KEY_ENTRY_ID)
         if kid:
             try:
                 models.set_knowledge_interview_history(kid, history)
@@ -1965,7 +1986,16 @@ async def _final_assemble_and_preview(
             context.user_data["kn_hashtags"] = polish["hashtags"]
         if polish.get("extracted_project"):
             org = context.user_data.setdefault("kn_org_metadata", {})
-            org.setdefault("project", polish["extracted_project"])
+            extracted = polish["extracted_project"].strip()
+            current = (org.get("project") or "").strip()
+            if not current:
+                org["project"] = extracted
+            elif extracted.lower() != current.lower():
+                # پروژه ذکرشده در متن با پروفایل متفاوت است — اولویت با متن، با اطلاع به کاربر
+                org["project"] = extracted
+                org["_project_overridden"] = True
+                org["_project_previous"] = current
+                logger.info("پروژه از '%s' (پروفایل) به '%s' (متن) تغییر کرد", current, extracted)
 
         # QA سبک غیرمسدودکننده — فقط هشدار، بدون مسدودسازی
         flags: list[str] = []
@@ -1981,10 +2011,22 @@ async def _final_assemble_and_preview(
         context.user_data["kn_qa_flags"] = flags
 
         text, kb = _org_menu_payload(context)
+        # اگر پروژه از متن استخراج و جایگزین پروفایل شده، به کاربر اطلاع بده
+        org_notify = context.user_data.get("kn_org_metadata") or {}
+        project_notice = ""
+        if org_notify.get("_project_overridden"):
+            project_notice = (
+                f"ℹ️ پروژه از «{org_notify.get('_project_previous') }» (پروفایل شما) "
+                f"به «{org_notify.get('project') }» (ذکرشده در متن) تغییر کرد. "
+                f"اگر درست نیست، از دکمه «🏗 تعیین پروژه» اصلاح کنید.\n\n"
+            )
+            org_notify.pop("_project_overridden", None)
+            org_notify.pop("_project_previous", None)
         await _prompt_reply(
             msg, context,
             "✅ فرم محتوایی آماده شد.\n\n"
-            "⚙️ *تنظیمات سازمانی* را تکمیل کنید (درخت دانش برای ثبت در دانا لازم است):\n\n"
+            + project_notice
+            + "⚙️ *تنظیمات سازمانی* را تکمیل کنید (درخت دانش برای ثبت در دانا لازم است):\n\n"
             + text,
             reply_markup=kb,
         )
