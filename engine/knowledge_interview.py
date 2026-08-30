@@ -156,10 +156,17 @@ def build_interview_system_prompt(
 {required_line}
 («بذر پیشنهاد» جزو سؤالات تو نیست — طبق فرم دانا خالی میماند.)
 
+نکته مهم ورودی صوتی (STT):
+متن کاربر حاصل تبدیل گفتار به نوشتار است و ممکن است غلط املائی جزئی داشته باشد (مثلاً «توربین گز» به‌جای «توربین گاز»). قبل از قضاوت، نیت را با اغماض حدس بزن و اصطلاح را به نزدیک‌ترین مورد واژه‌نامه بالا نگاشت کن؛ غلط تایپی را دلیل خالی گذاشتن فیلد یا تغییر طبقه‌بندی قرار نده و هرگز به خاطر یک حرف اشتباه، فیلد حیاتی را missing حساب نکن.
+
 قوانین حیاتی مصاحبه:
 ۱. ادبیات تو صمیمانه، محترمانه، فنی و دقیقاً متناسب با فضای کارگاهی سایت است.
 ۲. در هر پیام فقط و فقط «یک سؤال شفاف و کوتاه» بپرس.
-۳. قاعده تفکیک درس‌آموخته از پیشنهاد: اگر مصاحبه‌شونده بیان کرد اقدامی «انجام شد» → «درس‌آموخته» است؛ اگر نوع فعلی پیشنهاد است ولی از اتفاق اجراشده می‌گوید، switch_to_type را "lesson" قرار بده.
+۳. قاعده تفکیک درس‌آموخته / پیشنهاد / دانش صریح (خیلی مهم — همیشه بررسی کن):
+   - اگر نوع فعلی «درس‌آموخته» است ولی کاربر از یک پیشنهادِ اجراشده‌نشده حرف می‌زند (نشانه‌ها: «پیشنهادم اینه»، «باید ... بشه»، «اگر ... کنیم»، «نتیجه‌اش این میشه که ... خواهد شد») → switch_to_type را "suggestion" قرار بده.
+   - اگر نوع فعلی «پیشنهاد» است ولی کاربر از اقدامِ انجام‌شده با نتیجهٔ واقعی حرف می‌زند (نشانه‌ها: «انجام دادیم»، «نتیجه شد»، «مشکل برطرف شد») → switch_to_type را "lesson" قرار بده.
+   - اگر از منبع/کتاب/استاندارد/مقاله/گزارش حرف می‌زند → "explicit".
+   فقط وقتی مطمئنی switch کن، وگرنه null بگذار.
 ۴. هرگز شماره تجهیز را به تجهیز دیگر نسبت نده.
 ۵. هر زمان فیلدهای حیاتی پر شدند، done را true کن.
 
@@ -335,6 +342,20 @@ async def interview_next_turn(
             "switch_to_type": None,
             "error": "ai_disabled",
         }
+
+    # نرمال‌سازی غیرتهاجمی پیام کاربر (شفاف)
+    _orig_msg = user_message
+    if _orig_msg:
+        try:
+            import config as _cfg
+            if _cfg.ENABLE_TEXT_NORMALIZER:
+                from utils.text_normalizer import normalize_for_llm as _norm2
+                user_message = _norm2(user_message, threshold=_cfg.TEXT_NORMALIZER_THRESHOLD)
+                if user_message != _orig_msg:
+                    logger.debug("interview normalized: %r -> %r", _orig_msg[:300], user_message[:300])
+        except Exception:
+            logger.exception("text_normalizer interview failed — ادامه با متن اصلی")
+            user_message = _orig_msg
 
     system = build_interview_system_prompt(knowledge_type, user_profile)
     messages: list[dict] = [{"role": "system", "content": system}]

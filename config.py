@@ -86,6 +86,12 @@ GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
 GROQ_STT_MODEL: str = os.environ.get("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 GROQ_STT_BASE_URL: str = os.environ.get("GROQ_STT_BASE_URL", "https://api.groq.com/openai/v1")
 
+# ─── نرمال‌ساز متن STT (غیرتهاجمی، شفاف) ─────────────────────────────────────
+# قبل از ارسال متن STT به LLM، غلط‌های تایپی اصطلاحات واژه‌نامه با اطمینان بالا اصلاح می‌شود.
+# شفاف برای کاربر: هیچ پیامی نمایش داده نمی‌شود.
+ENABLE_TEXT_NORMALIZER: bool = os.environ.get("ENABLE_TEXT_NORMALIZER", "1") not in ("0", "false", "False")
+TEXT_NORMALIZER_THRESHOLD: float = float(os.environ.get("TEXT_NORMALIZER_THRESHOLD", "0.90"))
+
 # ─── ایجاد خودکار پوشه‌های runtime در زمان import ────────────────────────────
 
 def _ensure_dirs() -> None:

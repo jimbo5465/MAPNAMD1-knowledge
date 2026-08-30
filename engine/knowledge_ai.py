@@ -241,6 +241,10 @@ def build_system_prompt(knowledge_type: str) -> str:
         '"hashtags": ["برچسب۱", "برچسب۲"]'
         + (", \"impact_type\": \"کیفی\"" if knowledge_type == "suggestion" else "")
         + ', "classification": {"recommended": "...", "reason": "..."}}\n'
+        "\nقواعد تحمل غلط STT (مهم):\n"
+        "- متن ورودی حاصل تبدیل گفتار به نوشتار (STT) است و ممکن است ۱-۲ حرف غلط املائی داشته باشد؛ "
+        "قبل از قضاوت، نیت را با اغماض حدس بزن و اصطلاح را به نزدیک‌ترین واژه نیروگاهی/فنی نگاشت کن؛ "
+        "غلط تایپی را دلیل خالی گذاشتن فیلد قرار نده.\n"
         "\nقواعد:\n"
         "- برای هر کلید از فهرست مجاز زیر، فقط اگر مقدارش بهصورت صریح یا با استنتاجِ "
         "مطمئن در متن موجود است آن را در fields بنویس؛ وگرنه آن کلید را نیاور.\n"
@@ -390,6 +394,17 @@ async def extract_fields(knowledge_type: str, raw_text: str) -> dict:
     user_text = (raw_text or "").strip()[:_MAX_DESCRIPTION_LEN]
     if not user_text:
         return empty
+
+    # نرمال‌سازی غیرتهاجمی STT (شفاف، بدون پیام به کاربر)
+    if config.ENABLE_TEXT_NORMALIZER:
+        try:
+            from utils.text_normalizer import normalize_for_llm as _norm
+            _before = user_text
+            user_text = _norm(user_text, threshold=config.TEXT_NORMALIZER_THRESHOLD)
+            if user_text != _before:
+                logger.debug("extract_fields normalized: %r -> %r", _before[:300], user_text[:300])
+        except Exception:
+            logger.exception("text_normalizer failed — ادامه با متن اصلی")
 
     try:
         content = await _call_llm(system, user_text)
