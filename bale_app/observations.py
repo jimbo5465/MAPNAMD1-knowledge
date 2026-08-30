@@ -567,6 +567,11 @@ async def obs_voice_received(update, context) -> int:
     if text is None:
         return OBS_CONTENT
 
+    # اگر در حالت «افزودن به مشاهدهٔ موجود» هستیم → به همان مشاهده الحاق شود، نه مشاهدهٔ جدید
+    extend_id = context.user_data.get("obs_extend_id")
+    if extend_id:
+        return await _append_obs_extend(update, context, text)
+
     context.user_data["obs_voice_text"] = text
 
     await delete_tracked(context)
@@ -969,13 +974,13 @@ async def obs_extend_start(update, context) -> int:
     return OBS_EXTEND
 
 
-@require_registration
-async def obs_extend_received(update, context) -> int:
+async def _append_obs_extend(update, context, text: str) -> int:
+    """الحاق متن به مشاهدهٔ موجود (obs_extend_id) — مشترک برای متن و ویس."""
     obs_id = context.user_data.get("obs_extend_id")
     if not obs_id:
         return ConversationHandler.END
 
-    text = (update.message.text or "").strip()
+    text = (text or "").strip()
     if not text:
         await update.message.reply_text("❌ متن خالی است. دوباره بنویسید:")
         return OBS_EXTEND
@@ -1002,6 +1007,12 @@ async def obs_extend_received(update, context) -> int:
         ]),
     )
     return OBS_EXTEND
+
+
+@require_registration
+async def obs_extend_received(update, context) -> int:
+    text = (update.message.text or "").strip()
+    return await _append_obs_extend(update, context, text)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1098,15 +1109,29 @@ async def obs_search_query(update, context) -> int:
         results = search_observations(user.id, hashtag=clean)
     elif mode == "date":
         # تاریخ جلالی → میلادی
-        try:
-            greg_date = jalali_to_gregorian(raw)
-        except Exception:
-            await update.message.reply_text(
-                "❌ فرمت تاریخ نامعتبر. از `YYYY/MM/DD` استفاده کنید (مثال: `1402/12/15`).",
-                parse_mode="Markdown",
-            )
-            return OBS_SEARCH
-        results = search_observations(user.id, obs_date=greg_date)
+        raw_date = raw.replace("-", "/")
+        # اگر فقط سال/ماه (مثلاً 1402/12) → جستجوی ماه کامل
+        if len(raw_date) == 7 and raw_date.count("/") == 1:
+            try:
+                y, m = raw_date.split("/")
+                gd = jdatetime.date(int(y), int(m), 1).togregorian()
+            except Exception:
+                await update.message.reply_text(
+                    "❌ تاریخ نامعتبر. فرمت `YYYY/MM/DD` یا `YYYY/MM` (ماه کامل) را وارد کنید.",
+                    parse_mode="Markdown",
+                )
+                return OBS_SEARCH
+            results = search_observations(user.id, obs_date=f"{gd.year:04d}-{gd.month:02d}")
+        else:
+            try:
+                greg_date = jalali_to_gregorian(raw_date)
+            except Exception:
+                await update.message.reply_text(
+                    "❌ فرمت تاریخ نامعتبر. از `YYYY/MM/DD` استفاده کنید (مثال: `1402/12/15`).",
+                    parse_mode="Markdown",
+                )
+                return OBS_SEARCH
+            results = search_observations(user.id, obs_date=greg_date)
 
     if not results:
         await update.message.reply_text(

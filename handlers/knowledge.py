@@ -2596,14 +2596,14 @@ async def kn_tree_nav_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         current_path = context.user_data.get("kn_tree_current_path") or []
         if not current_path:
             # بازگشت به منوی انتخاب روش
-            return await kn_org_tree.callback(query, context)
+            return await kn_org_tree(update, context)
         current_path = current_path[:-1]
         context.user_data["kn_tree_current_path"] = current_path
 
         from engine.knowledge_tree import get_children as _gc
         new_children = _gc(current_path)
         if not new_children:
-            return await kn_org_tree.callback(query, context)
+            return await kn_org_tree(update, context)
         kb = _tree_drill_keyboard(len(current_path), current_path, new_children)
         await query.edit_message_text(
             f"🌳 مسیر: {' > '.join(current_path)}\n\nفرزندان را انتخاب کنید:",
