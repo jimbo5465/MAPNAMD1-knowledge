@@ -16,6 +16,8 @@
 6. هر تغییر در ساختار دیتابیس باید migration خودکار در `db/init.py` داشته باشد (نه حذف دیتابیس).
 7. پیام‌های کاربر باید فارسی باشد — متن‌های UI فارسی هستند.
 8. هر عملیات AI باید با قفل `busy_lock` محافظت شود تا تداخل پیش نیاید.
+9. **پورت موازی:** هر تغییر در کد یک پلتفرم باید بلافاصله در نسخهٔ دیگر (handlers/ ↔ bale_app/) اعمال شود. باگ‌هایی که فقط در یک نسخه فیکس شوند، ناهماهنگی می‌سازند.
+10. **هیچ مسیری نباید به در بسته بخورد:** هر ConversationHandler باید در تمام stateها خروجی منطقی بدهد (valid transition, fallback مناسب, یا `ConversationHandler.END`).
 
 ---
 
@@ -26,7 +28,8 @@
 توابع `db/models.py` که پارامتر `telegram_id` دارند، از این پس **شناسهٔ هر پلتفرم**
 (تلگرام یا بله) را می‌پذیرند و داخلی با `get_user_by_platform_id` به رکورد کاربر
 resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search_observations`,
-`find_pending_knowledge_by_user`, `add_knowledge_entry`, `update_user`.
+`find_pending_knowledge_by_user`, `add_knowledge_entry`, `update_user`,
+`list_knowledge_by_user`, `search_knowledge_by_user`.
 
 هرگز مستقیم با شناسهٔ خام پلتفرم روی جدول `observations.telegram_id` کوئری نزنید —
 همیشه از توابع models استفاده کنید تا داده‌های لینک‌شده گم نشوند.
@@ -43,17 +46,42 @@ resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search
 | تابع | امضا | توضیح |
 |---|---|---|
 | `get_user_by_platform_id` | `(platform_id) -> dict \| None` | جستجو در **هر دو** ستون `telegram_id` و `bale_id` |
+| `get_user_by_telegram_id` | `(telegram_id) -> dict \| None` | جستجوی مستقیم در `telegram_id` (مصرف داخلی) |
+| `get_user_by_db_id` | `(db_id) -> dict \| None` | جستجو با شناسهٔ داخلی `users.id` |
 | `find_linkable_user` | `(phone, personnel_code) -> dict \| None` | تطبیق همزمان `phone_norm` + کد پرسنلی (لایهٔ امنیتی) |
 | `link_platform_account` | `(db_user_id, platform_id, platform) -> None` | اتصال شناسهٔ `bale`/`telegram` به رکورد موجود |
 | `deactivate_duplicate_accounts` | `(platform_id, keep_db_id, future_owner_key=None) -> int` | ادغام رکوردهای تکراری قدیمی — دانش/مشاهدات منتقل، رکورد غیرفعال |
 | `register_or_link_user` | `(*, platform, platform_id, full_name, phone=None, personnel_code=None, project_name=None, position=None) -> tuple[int, bool]` | در پایان ثبت‌نام: ثبت جدید یا لینک به حساب موجود. خروجی: `(user_db_id, linked?)` |
+| `update_user` | `(platform_id, **fields) -> None` | به‌روزرسانی فیلدهای پروفایل (با allowlist ستون‌های مجاز) |
 
 قواعد لینک:
 - لینک **فقط** با تطبیق شمارهٔ نرمال‌شده + کد پرسنلی انجام می‌شود (هر دو اجباری).
 - ثبت اولیه در بله: `telegram_id` = شناسهٔ بله (کلید مالکیت) و `bale_id` = شناسهٔ بله.
-- رکورد تکراریِ ادغام‌شده: `is_active=0` ، `bale_id=NULL` ، `telegram_id=-<id>` (sentinel منفی).
+- رکورد تکراریِ ادغام‌شده: `is_active=0`، `bale_id=NULL`، `telegram_id=-<id>` (sentinel منفی).
 - انتقال داده هنگام ادغام: `knowledge_entries.reported_by` و `observations.telegram_id`
   به کلید مالکیت نهایی (`future_owner_key`) منتقل می‌شوند.
+
+### `db/models.py` — دانش
+
+| تابع | امضا | توضیح |
+|---|---|---|
+| `add_knowledge_entry` | `(telegram_id, knowledge_type, reporter_name, raw_description=None, reporter_title=None, project_name=None) -> int` | ایجاد رکورد دانش جدید. خروجی: `knowledge_id` |
+| `get_knowledge_entry_by_id` | `(knowledge_id) -> dict \| None` | جزییات دانش |
+| `set_knowledge_fields` | `(knowledge_id, fields, draft_text=None) -> None` | ذخیره فیلدهای استخراج‌شده + پیش‌نویس |
+| `submit_knowledge_entry` | `(knowledge_id, kn_number, pdf_path, docx_path) -> None` | ثبت نهایی (status → submitted) |
+| `set_knowledge_inactive` | `(knowledge_id) -> None` | غیرفعال کردن (رد کردن) |
+| `list_knowledge_entries` | `(active_only=True) -> list[dict]` | همهٔ دانش‌ها |
+| `list_knowledge_by_user` | `(telegram_id, active_only=True) -> list[dict]` | دانش‌های کاربر (جدیدترین اول) |
+| `search_knowledge_by_user` | `(telegram_id, keyword, limit=30) -> list[dict]` | جستجو در kn_number / fields_json / draft_text / raw_description |
+| `add_knowledge_photo` | `(knowledge_id, path) -> int` | افزودن عکس به دانش |
+| `list_knowledge_photos` | `(knowledge_id) -> list[dict]` | لیست عکس‌های دانش |
+| `set_knowledge_interview_history` | `(knowledge_id, history) -> None` | ذخیره تاریخچهٔ مصاحبه |
+| `get_knowledge_interview_history` | `(knowledge_id) -> list` | بازیابی تاریخچهٔ مصاحبه |
+| `set_knowledge_tree_path` | `(knowledge_id, path) -> None` | ذخیره مسیر درخت دانش |
+| `get_knowledge_tree_path` | `(knowledge_id) -> list[str]` | بازیابی مسیر درخت |
+| `set_knowledge_org_metadata` | `(knowledge_id, org_data) -> None` | ذخیره متادیتای سازمانی (committee, seed, colleagues, hashtags) |
+| `get_knowledge_org_metadata` | `(knowledge_id) -> dict` | بازیابی متادیتای سازمانی |
+| `find_pending_knowledge_by_user` | `(telegram_id) -> dict \| None` | یافتن پیش‌نویس ناتمام کاربر |
 
 ### `db/models.py` — مشاهدات
 
@@ -68,13 +96,8 @@ resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search
 | `archive_observation` | `(obs_id) -> None` |
 | `add_observation_attachment` | `(observation_id, file_path, file_name=None, mime_type=None, file_size=None) -> int` |
 | `list_observation_attachments` | `(observation_id) -> list[dict]` |
-
-### `db/models.py` — بایگانی دانش
-
-| تابع | امضا | توضیح |
-|---|---|---|
-| `list_knowledge_by_user` | `(telegram_id, active_only=True) -> list[dict]` | همهٔ دانش‌های کاربر (جدیدترین اول) — شناسهٔ هر پلتفرم |
-| `search_knowledge_by_user` | `(telegram_id, keyword, limit=30) -> list[dict]` | جستجو در kn_number / fields_json / draft_text / raw_description — فقط دانش‌های خود کاربر |
+| `get_observation_attachment` | `(attachment_id) -> dict \| None` |
+| `remove_observation_attachment` | `(attachment_id) -> None` |
 
 ### ساختار جدول `users`
 
@@ -98,7 +121,7 @@ resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search
 | `status` | TEXT | `raw` / `maturing` / `promoted` / `archived` |
 | `promoted_to_kn_id` | INTEGER | ارجاع به دانش در صورت ارتقا |
 | `project_name` | TEXT | نام پروژه |
-| `tags` | TEXT | JSON آرایه‌ی هشتگ‌ها |
+| `tags` | TEXT | JSON آرایهٔ هشتگ‌ها |
 | `obs_date` | TEXT | تاریخ مشاهده (میلادی `YYYY-MM-DD`) |
 | `created_at` / `updated_at` | TEXT | زمان‌ها |
 
@@ -118,7 +141,9 @@ resolve می‌کنند: `add_observation`, `list_observations_by_user`, `search
 
 ## قراردادهای Handler
 
-### States در `handlers/observations.py`
+### States در `handlers/observations.py` و `bale_app/observations.py`
+
+هر دو نسخه stateهای یکسانی دارند:
 
 ```
 OBS_CONTENT = 0        # دریافت متن/ویس/عکس اولیه
@@ -135,11 +160,37 @@ OBS_SEARCH = 8         # دریافت عبارت جستجو
 ### فلوی ثبت مشاهده
 
 ```
-OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
+متن: OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 ویس: OBS_CONTENT → OBS_CONFIRM_VOICE → OBS_EDIT_CHOICE → OBS_TITLE
+افزودن: OBS_EXTEND → (متن/ویس → _append_obs_extend → الحاق به همون مشاهده)
 ```
 
-### callback_data ها
+### States در `handlers/knowledge.py` و `bale_app/knowledge.py`
+
+```
+KN_MODE_SELECT = 0        # زیرمنو: روش دستی / مصاحبه با AI
+KN_TYPE = 1               # نوع دانش
+KN_REPORTER_NAME = 2      # نام گزارش‌دهنده
+KN_REPORTER_TITLE = 3     # سمت (اختیاری)
+KN_DESCRIPTION = 4        # شرح آزاد تجربه (روش دستی)
+KN_FIELD_ANSWER = 5       # پرسش فیلدهای ناقص (یکی یکی)
+KN_INTERVIEW_FRAMEWORK = 6  # نمایش چارچوب راهنما (روش مصاحبه)
+KN_INTERVIEW_LOOP = 7     # حلقهٔ مصاحبه با AI
+KN_FINAL_ASSEMBLE = 8     # پاس AI polish نهایی (transient)
+KN_ORG_META = 9           # تنظیمات سازمانی (درخت/کمیته/بذر/همکاران/هشتگ/محدوده)
+KN_TREE = 10              # انتخاب درخت دانش (sub-flow)
+KN_PREVIEW = 11           # پیشنمایش + ۳ کلید
+KN_FIELD_EDIT = 12        # ویرایش یک فیلد از preview
+KN_PHOTOS = 13            # عکس/مدرک
+KN_DATE = 14              # تاریخ ثبت
+KN_FIELD_DIRECT = 15      # پرسش مستقیم فیلدهای دانا (دستیِ خالصِ بدون AI)
+KN_FINISH = 16            # ثبت نهایی + ساخت PDF/DOCX + ارسال
+KN_TYPE_CONFIRM = 17      # تأیید نوع پس از پیشنهاد AI (تعارض طبقه‌بندی)
+KN_ARCHIVE_LIST = 18      # بایگانی دانش — لیست صفحه‌بندی‌شده/نتایج جستجو
+KN_SEARCH_INPUT = 19      # دریافت عبارت جستجو در دانش‌ها
+```
+
+### callback_data — مشاهدات
 
 | الگو | هدف |
 |---|---|
@@ -149,34 +200,62 @@ OBS_CONTENT → OBS_TITLE → OBS_TAGS → OBS_DATE → OBS_ATTACHMENTS
 | `obs:extend:<id>` | افزودن مطلب |
 | `obs:promote:<id>` | ارتقا به دانش |
 | `obs:archive:<id>` | بایگانی |
-| `obs:search*` | جستجو |
-| `obs:edit_voice` / `obs:confirm_voice` | تأیید/اصلاح ویس |
-| `obs:edit_replace` / `obs:edit_append` | جایگزین/افزودن متن |
+| `obs:search` | راهاندازی جستجو |
+| `obs:search:mode` | انتخاب حالت جستجو (keyword/hashtag/date) |
+| `obs:listpage:N` | صفحهٔ N لیست (منبع: همه یا نتایج جستجو) |
+| `obs:confirm_voice` / `obs:edit_voice` | تأیید/اصلاح ویس |
+| `obs:edit_replace` / `obs:edit_append` | جایگزین/افزودن متن اصلاح‌شده |
 | `obs:add_photo:<id>` / `obs:add_file:<id>` | افزودن پیوست |
+| `obs:skip` | رد کردن (هشتگ/تاریخ) |
 | `menu:main` | بازگشت به منو |
+
+### callback_data — دانش
+
+| الگو | هدف | یادداشت |
+|---|---|---|
+| `kn:new` | شروع ثبت جدید | → `KN_MODE_SELECT` |
+| `kn:mode:direct` | ثبت دستی | |
+| `kn:mode:interview` | مصاحبه با AI | |
+| `kn:type:<lesson\|suggestion\|explicit>` | انتخاب نوع دانش | |
+| `kn:skip` | رد کردن مرحلهٔ اختیاری | |
+| `kn:field:N` | ارسال پاسخ فیلد N | |
+| `kn:flag:confirm` / `kn:flag:reject` | تأیید/رد QA flags | |
+| `kn:org:done` | پایان تنظیمات سازمانی | |
+| `kn:org:skip` | رد تنظیمات سازمانی | |
+| `kn:tree:ai` | پیشنهاد AI برای درخت | |
+| `kn:tree:drill` | انتخاب دستی از درخت | |
+| `kn:tree:type` | تایپ مسیر کامل | (کد مرده — هرگز استفاده نمی‌شود) |
+| `kn:tree:skip` | رد کردن درخت | |
+| `kn:back` | بازگشت به مرحلهٔ قبل | |
+| `kn:edit:<field>` | ویرایش فیلد از preview | |
+| `kn:edit:done` | پایان ویرایش فیلدها | |
+| `kn:preview` | بازگشت به preview از ویرایش | |
+| `photo:done` | پایان افزودن عکس | |
+| `kn:finish` | ثبت نهایی | |
+| `kn:summary` | خلاصهٔ دانش بعد از ثبت | |
+| `kn:archive` | بایگانی (از دانش ثبت‌شده) | |
+| `kn:list` | لیست صفحه‌بندی‌شدهٔ دانش‌ها | |
+| `kn:search` | جستجوی دانش | |
+| `kn:view:<id>` | مشاهدهٔ جزئیات دانش | |
+| `kn:archpage:N` | صفحهٔ N لیست بایگانی | |
+| `kn:promote:<obs_id>` | ارتقا از مشاهده به دانش | |
 
 ### زیرمنوی بایگانی و جستجو
 
-منوی اصلی یک دکمهٔ «🗂️ بایگانی و جستجو» دارد (`archive:open`) که به دو زیربخش می‌رسد.
-هندلرهای `archive:*` در `handlers/archive.py` و `bale_app/archive.py` هستند (standalone).
+| الگو | هدف |
+|---|---|
+| `archive:open` | زیرمنو: بایگانی مشاهدات / بایگانی دانش |
+| `archive:obs` | زیرمنوی مشاهدات → دکمه‌های `obs:list` و `obs:search` |
+| `archive:kn` | زیرمنوی دانش → دکمه‌های `kn:list` و `kn:search` |
 
-| الگو | هدف | ثبت‌شده در |
-|---|---|---|
-| `archive:open` | زیرمنو: بایگانی مشاهدات / بایگانی دانش | standalone |
-| `archive:obs` | زیرمنوی مشاهدات → دکمه‌های `obs:list` و `obs:search` | standalone |
-| `archive:kn` | زیرمنوی دانش → دکمه‌های `kn:list` و `kn:search` | standalone |
-| `obs:listpage:N` | صفحهٔ N لیست مشاهدات (۵ آیتم در صفحه؛ منبع: همه یا نتایج جستجو) | entry_point مشاهده |
-| `kn:list` | لیست صفحه‌بندی‌شدهٔ دانش‌های خود کاربر | entry_point دانش |
-| `kn:search` | دریافت عبارت جستجوی دانش | entry_point دانش |
-| `kn:view:<id>` | جزئیات یک دانش (**فقط مالک**؛ لینک «مشاهده دانش» مشاهدات ارتقایی را هم فعال می‌کند) | entry_point دانش |
-| `kn:archpage:N` | صفحهٔ N لیست بایگانی | state `KN_ARCHIVE_LIST` |
+### callback_data — ثبت‌نام و پروفایل
 
-States جدید در ConversationHandler دانش (هر دو پلتفرم):
-
-```
-KN_ARCHIVE_LIST = 17   # لیست/نتایج + صفحه‌بندی + مشاهدهٔ جزئیات
-KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
-```
+| الگو | هدف |
+|---|---|
+| `reg:start` | شروع ثبت‌نام |
+| `reg:edit` | **(کد مرده — دکمه ساخته می‌شود ولی استفاده نمی‌شود)** |
+| `profile:edit` | شروع ویرایش پروفایل (وارد می‌شود ولی دکمه‌ای ندارد) |
+| `profile:view` | نمایش پروفایل |
 
 ---
 
@@ -190,6 +269,9 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 | `extract_fields` | `(knowledge_type, raw_text) -> dict` (async) |
 | `field_labels` | `(knowledge_type) -> dict[str, str]` |
 | `field_order` | `(knowledge_type) -> list[str]` |
+| `build_system_prompt` | `(knowledge_type) -> str` |
+| `get_ordered_field_keys` | `(knowledge_type) -> list[str]` |
+| `order_fields_by_priority` | `(knowledge_type, keys) -> list[str]` |
 
 ### `engine/knowledge_interview.py`
 
@@ -198,12 +280,51 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 | `interview_next_turn` | `(context_data: dict) -> dict` (async) |
 | `polish_dana_draft` | `(report: dict) -> dict` (async) |
 | `suggest_tree_paths` | `(knowledge_type, raw_text) -> list[str]` (async) |
+| `qa_flags` | `(knowledge_type, fields) -> dict` (async) |
+| `build_interview_system_prompt` | `(project_name=None) -> str` |
+| `build_polish_system_prompt` | `() -> str` |
+| `build_tree_suggestion_system_prompt` | `(knowledge_type) -> str` |
+| `build_qa_system_prompt` | `() -> str` |
 
 ### `engine/knowledge_numbering.py`
 
 | تابع | امضا |
 |---|---|
 | `generate_knowledge_number` | `(project_id=None) -> str` |
+| `project_code` | `(project_id) -> str` |
+| `max_serial_for_project` | `(project_id) -> int` |
+| `jalali_year` | `() -> int` |
+
+### `engine/knowledge_tree.py`
+
+| تابع | امضا | توضیح |
+|---|---|---|
+| `get_children` | `(path) -> list[str]` | فرزندان یک نود |
+| `is_leaf` | `(path) -> bool` | آیا برگ است؟ |
+| `get_leaf_paths` | `() -> list[list[str]]` | همهٔ مسیرهای برگ |
+| `find_path_by_leaf_name` | `(leaf_name) -> list[str] \| None` | جستجو با نام برگ |
+| `render_path` | `(path) -> str` | نمایش مسیر با / |
+| `all_paths_as_lines` | `() -> list[str]` | همهٔ مسیرها به‌صورت خطی |
+| `tree_as_yaml` | `() -> str` | درخت به‌صورت YAML |
+| `validate_path` | `(path) -> bool` | اعتبارسنجی مسیر |
+| `total_leaf_count` | `() -> int` | تعداد برگ‌ها |
+| `total_node_count` | `() -> int` | تعداد کل نودها |
+
+### `engine/knowledge_draft.py`
+
+| تابع | امضا |
+|---|---|
+| `build_report` | `(entry, fields) -> dict` |
+| `extract_title_from_draft` | `(draft) -> str` |
+| `entry_display_title` | `(entry) -> str` |
+| `render_text` | `(report) -> str` |
+
+### `engine/knowledge_render.py`
+
+| تابع | امضا |
+|---|---|
+| `render_dana_pdf` | `(report, out_path) -> bool` |
+| `render_dana_docx` | `(report, out_path) -> str` |
 
 ### قالب فیلدهای دانش
 
@@ -226,10 +347,12 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 
 | تابع | امضا |
 |---|---|
-| `jalali_to_gregorian` | `(jalali_str) -> str` (خروجی `YYYY-MM-DD`) |
+| `jalali_to_gregorian` | `(jalali_str) -> str` (خروجی `YYYY-MM-DD`) — فقط `YYYY/MM/DD` کامل |
 | `gregorian_to_jalali` | `(gregorian_str) -> str` (خروجی `YYYY/MM/DD`) |
 | `gregorian_to_jalali_display` | `(gregorian_str) -> str` (خروجی `۱۵ اسفند ۱۴۰۲`) |
 | `validate_jalali_date_str` | `(value) -> (bool, str \| None)` |
+
+---
 
 ## قراردادهای وب‌اپ (webapp/)
 
@@ -237,14 +360,16 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 |---|---|---|
 | `/api/auth` | POST | `{init_data, platform}` → توکن نشست + پروفایل؛ 403 اگر ثبت‌نام نکرده |
 | `/api/me` | GET | پروفایل کاربر نشست |
-| `/api/kn` / `/api/kn/search?q=` | GET | لیست صفحه‌بندی‌شده / جستجوی دانش‌های خود کاربر |
+| `/api/kn` | GET | لیست صفحه‌بندی‌شدهٔ دانش‌های خود کاربر |
+| `/api/kn/search?q=` | GET | جستجوی دانش‌های خود کاربر |
 | `/api/kn/{id}` | GET | جزئیات دانش (فقط مالک) |
-| `/api/obs` / `/api/obs/search?q=` | GET | لیست / جستجوی مشاهدات |
+| `/api/obs` | GET | لیست مشاهدات خود کاربر |
+| `/api/obs/search?q=` | GET | جستجوی مشاهدات |
 | `/api/obs/{id}` | GET | جزئیات مشاهده + متادیتای پیوست‌ها |
 | `/api/file/obs-att/{id}` | GET | دانلود پیوست (فقط مالک مشاهده) |
 
 قواعد:
-- همه به‌جز auth نیاز به `Authorization: Bearer <token>` دارند.
+- همه به‌جز auth نیاز به `Authorization: Bearer ***` دارند.
 - توکن نشست: payload JSON base64url + امضای HMAC با `WEBAPP_SECRET` — TTL ۷ روز.
 - اعتبارسنجی initData: HMAC-SHA256 با secret مشتق‌شده از توکن همان پلتفرم
   (هر دو ترتیب مستندشده پذیرفته می‌شود) + چک تازگی `auth_date` (حداکثر ۲ روز).
@@ -264,6 +389,7 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 | `KNOWLEDGE_AI_MODEL` | پیش‌فرض `deepseek-v4-flash` |
 | `GROQ_API_KEY` | کلید Groq برای STT |
 | `GROQ_STT_MODEL` | پیش‌فرض `whisper-large-v3-turbo` |
+| `KNOWLEDGE_AI_TIMEOUT` | پیش‌فرض `120` (ثانیه) |
 | `WEBAPP_SECRET` | کلید امضای توکن نشست وب‌اپ (فایل `/etc/knowledgebot/webapp.env` روی سرور) |
 
 ---
@@ -272,9 +398,10 @@ KN_SEARCH_INPUT  = 18  # دریافت عبارت جستجو
 
 | تاریخ | تغییر |
 |---|---|
-| 1403/05 | نسخه‌ی اولیه — فورک از WelderBot با پاکسازی |
+| 1403/05 | نسخهٔ اولیه — فورک از WelderBot با پاکسازی |
 | 1403/05 | افزودن ثبت‌نام اجباری، مشاهده، جستجو، قفل AI |
 | 1404/06 | پورت کامل روی بله (`bale_app/` + `main_bale.py`) — دو پلتفرم، یک دیتابیس |
 | 1404/06 | **لینک حساب‌های بله/تلگرام**: نرمال‌سازی شماره (`phone_utils`)، ستون‌های `bale_id`/`phone_norm`، لینک خودکار با شماره+کد پرسنلی، ادغام رکوردهای تکراری قدیمی |
 | 1404/06 | **بایگانی و جستجو**: ترکیب دکمه‌های منو، لیست صفحه‌بندی‌شدهٔ دانش‌ها، جستجوی متنی در دانش‌ها (`kn:list` / `kn:search` / `kn:view`) |
 | 1404/06 | **مینی‌اپ وب**: `webapp/` (FastAPI + SPA)، دامنهٔ `web.mohsekarim8.ir` با CF Origin Cert، دکمهٔ `web_app` در منوی بله، پشتیبانی تلگرام |
+| 1404/06 | باگ ۱ (جستجوی ماه کامل) + باگ ۲ (ویس در OBS_EXTEND) فیکس شدند |

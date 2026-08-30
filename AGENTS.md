@@ -4,48 +4,45 @@
 
 ---
 
-## 🖥️ سیستم لوکال (ویندوز کاربر)
-
-- **پاورشل بسته است** (Group Policy) — مستقیم از `cmd` استفاده کن، نه powershell.
-  - به‌جای `Get-Content` → `type`، به‌جای `Test-NetConnection` → پایتون یا ssh.
-  - خروجی فارسی در cmd: ابتدا `set PYTHONIOENCODING=utf-8`
-- مسیر پروژه: `C:\Users\shaterian_m\Documents\Default Project\knowledge creation Bale BOT`
-- Python سیستم: 3.14 (`python` در PATH)
-- **ربات اصلی روی VPS اجرا می‌شود؛ سیستم لوکال فقط برای توسعه است.**
-  - اجرای لوکال تستی (اختیاری): `run_bale.bat` (شامل توکن — gitignore شده)
-
 ## 🌐 VPS — سرور اصلی
 
 | مورد | مقدار |
 |---|---|
-| اتصال SSH | `ssh vps` (در `%USERPROFILE%\.ssh\config` تعریف شده) |
+| اتصال SSH | `ssh vps` (در `%USERPROFILE%\\.ssh\\config` تعریف شده) |
 | آیپی | `91.107.153.202` |
 | **پورت SSH: ۴۴۳** | ⚠️ پورت‌های ۲۲/۵۳۲۲ و بقیه بسته‌اند — فقط 443 باز است |
 | یوزر | `root` |
 | هاست‌نیم | `ubuntu-2gb-nbg1-1` (Hetzner) |
-| مسیر ریپو روی سرور | `/root/MAPNAMD1-knowledge` (نه /opt!) |
+| مسیر ریپو روی سرور | `/root/MAPNAMD1-knowledge` |
 | venv سرور | `/root/MAPNAMD1-knowledge/.venv` |
+| RAM | 2GB (~0.6GB free با همه سرویس‌ها) |
 
 ### سرویس‌های systemd روی سرور
+
 | سرویس | توضیح |
 |---|---|
-| `knowledgebot-bale.service` | **نسخه بله** (اصلی) — `main_bale.py` |
 | `knowledgebot.service` | نسخه تلگرام — `main.py` |
+| `knowledgebot-bale.service` | نسخه بله — `main_bale.py` |
+| `knowledgebot-webapp.service` | وب‌اپ — `webapp/main.py` (uvicorn) |
 
 ### جریان استقرار (deploy)
+
 ```bash
 # لوکال:
 git add -A && git commit -m "..." && git push origin main
 
 # سرور:
-ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgebot-bale"
+ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgebot knowledgebot-bale knowledgebot-webapp"
 
 # لاگ زنده سرور:
 ssh vps "journalctl -u knowledgebot-bale -f --no-pager"
 ```
 
 - ریپو گیت‌هاب: `https://github.com/jimbo5465/MAPNAMD1-knowledge`
-- پیام «BOT_TOKEN تنظیم نشده» هنگام import مربوط به نسخه تلگرام است — برای نسخه بله بی‌ضرر (از `BALE_BOT_TOKEN` داخل سرویس استفاده می‌شود).
+- پیام «BOT_TOKEN تنظیم نشده» هنگام import مربوط به نسخه تلگرام است — برای نسخه بله بی‌ضرر
+  (از `BALE_BOT_TOKEN` داخل سرویس استفاده می‌شود).
+
+---
 
 ## 📦 نکات کتابخانه bale (نسخه نصب‌شده ۲.۵)
 
@@ -54,6 +51,8 @@ ssh vps "journalctl -u knowledgebot-bale -f --no-pager"
 - `answerCallbackQuery` در API بله وجود ندارد — لایه `bale_app/framework.py` شبیه‌سازی کرده.
 - مارک‌داون پشتیبانی نمی‌شود — `strip_markdown` در framework متن را تمیز می‌کند.
 
+---
+
 ## 💾 بکاپ (فعال از 1404/06)
 
 - cron روزانه 3:30 سرور: `scripts/backup_db.py` → `/root/backups/knowledgebot/knowledge-YYYY-MM-DD.db.gz`
@@ -61,13 +60,29 @@ ssh vps "journalctl -u knowledgebot-bale -f --no-pager"
 - بازیابی: `gunzip -c <file> > data/knowledge.db` (سرویس‌ها متوقف)
 - **TODO آینده:** ارسال بکاپ خارج از سرور (چت ادمین بله/تلگرام یا storage)، بکاپ پوشهٔ `media/`
 
+---
+
 ## 🐛 تجربه‌های دیباگ قبلی
 
-- «این دکمه دیگر معتبر نیست» = callback ناشناخته → حالا در `main_bale.py` لاگ می‌شود (unknown_callback_handler).
+- «این دکمه دیگر معتبر نیست» = callback ناشناخته → در `main_bale.py` لاگ می‌شود (unknown_callback_handler).
 - Dispatcher سفارشی در `bale_app/framework.py` — state گفتگوها در حافظه است؛ ری‌استارت سرویس همه stateها را پاک می‌کند.
+- `kn_org_tree.callback` در نسخه تلگرام فیکس شد (خط ۲۵۹۹/۲۶۰۶) — `callback(query, context)` → `(update, context)`.
+- جستجوی ماه کامل (`1402/12`) در مشاهدات فیکس شد — تبدیل به `YYYY-MM` میلادی قبل از `search_observations`.
+- ویس در `OBS_EXTEND` فیکس شد — `_append_obs_extend` مشترک برای متن و ویس.
+
+---
 
 ## 🔗 هویت دوپلتفرمی (لینک بله/تلگرام)
 
 - یک کاربر واحد در هر دو پلتفرم: تطبیق `phone_norm` (۱۰ رقم آخر شماره) + کد پرسنلی — از `register_or_link_user` در `db/models.py`.
 - توابع models که پارامتر `telegram_id` دارند، شناسهٔ هر دو پلتفرم را می‌پذیرند و داخلی resolve می‌کنند — هرگز مستقیم روی `observations.telegram_id` با شناسهٔ خام کوئری نزن.
 - تست‌ها: `test_link_accounts.py` و `test_migration.py` (با دیتابیس موقت، بی‌خطر برای data/knowledge.db).
+
+---
+
+## ⚠️ قانون مهم برای AI
+
+1. **پورت موازی:** هر تغییر در `handlers/` باید در `bale_app/` هم اعمال شود. باگ‌هایی که فقط یک نسخه فیکس شوند، ناهماهنگی می‌سازند.
+2. **هیچ مسیری نباید به در بسته بخورد:** هر ورودی کاربر در هر state باید خروجی منطقی بدهد — valid transition, fallback, یا `ConversationHandler.END`.
+3. **هیچ تغییری بدون اجازه صریح کاربر روی ریپو اعمال نشود.**
+4. **دانش فنی به فارسی ساده** توضیح داده شود، کاربر خودش دستورات را اجرا می‌کند.

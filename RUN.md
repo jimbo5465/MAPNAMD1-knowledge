@@ -80,12 +80,13 @@ python main_bale.py    # نسخهٔ بله
 | `no such column: title` | دیتابیس قدیمی | حذف `data/knowledge.db` و اجرای مجدد — یا migration خودکار |
 | `HTTP 403 error code: 1010` | IP بلاک شده | کلاینت را با httpx امتحان کنید (urllib فرستنده نیست) |
 | `'NoneType' object has no attribute 'reply_text'` | خطا در callback query | `update.effective_message` را جایگزین `update.message` کنید |
+| `'function' object has no attribute 'callback'` | دکوراتور حذف شده ولی کال‌ها عوض نشده‌اند | `kn_org_tree.callback(...)` → `kn_org_tree(...)` |
 
 ---
 
 ## ۶. استقرار روی VPS با systemd
 
-مسیر پروژه روی سرور: `/root/MAPNAMD1-knowledge` — دو سرویس جداگانه:
+مسیر پروژه روی سرور: `/root/MAPNAMD1-knowledge` — سه سرویس جداگانه:
 
 ```bash
 # سرویس تلگرام (main.py)
@@ -94,12 +95,16 @@ sudo systemctl enable --now knowledgebot
 # سرویس بله (main_bale.py)
 sudo systemctl enable --now knowledgebot-bale
 
-# بررسی وضعیت هر دو
-sudo systemctl status knowledgebot knowledgebot-bale
+# سرویس وب‌اپ (uvicorn — webapp/main.py)
+sudo systemctl enable --now knowledgebot-webapp
+
+# بررسی وضعیت هر سه
+sudo systemctl status knowledgebot knowledgebot-bale knowledgebot-webapp
 
 # لاگ زنده
 sudo journalctl -u knowledgebot -f          # تلگرام
 sudo journalctl -u knowledgebot-bale -f     # بله
+sudo journalctl -u knowledgebot-webapp -f   # وب‌اپ
 ```
 
 ### جریان استقرار (deploy)
@@ -109,7 +114,7 @@ sudo journalctl -u knowledgebot-bale -f     # بله
 git add -A && git commit -m "..." && git push origin main
 
 # سرور:
-ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgebot-bale knowledgebot"
+ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgebot-bale knowledgebot knowledgebot-webapp"
 ```
 
 > **نکته:** تغییرات ساختار دیتابیس هنگام ری‌استارت به‌صورت خودکار migration می‌شوند
@@ -117,7 +122,7 @@ ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgeb
 
 ---
 
-## ۸. بکاپ و بازیابی
+## ۷. بکاپ و بازیابی
 
 - **بکاپ خودکار:** هر روز ساعت ۳:۳۰ بامداد با cron روی سرور اجرا می‌شود
   (`scripts/backup_db.py`) → `/root/backups/knowledgebot/knowledge-YYYY-MM-DD.db.gz`
@@ -128,14 +133,14 @@ ssh vps "cd /root/MAPNAMD1-knowledge && git pull && systemctl restart knowledgeb
 
 ```bash
 # ۱. توقف سرویس‌ها
-sudo systemctl stop knowledgebot-bale knowledgebot
+sudo systemctl stop knowledgebot-bale knowledgebot knowledgebot-webapp
 
 # ۲. بازگردانی (مسیر بکاپ موردنظر)
 gunzip -c /root/backups/knowledgebot/knowledge-YYYY-MM-DD.db.gz \
     > /root/MAPNAMD1-knowledge/data/knowledge.db
 
 # ۳. اجرای مجدد
-sudo systemctl start knowledgebot-bale knowledgebot
+sudo systemctl start knowledgebot knowledgebot-bale knowledgebot-webapp
 ```
 
 ### اجرای دستی بکاپ
@@ -146,7 +151,7 @@ cd /root/MAPNAMD1-knowledge && .venv/bin/python scripts/backup_db.py
 
 ---
 
-## ۹. وب‌اپ (مینی‌اپ)
+## ۸. وب‌اپ (مینی‌اپ)
 
 - آدرس: `https://web.mohsekarim8.ir` (Cloudflare پروکسی + Origin Certificate تا ۲۰۴۱)
 - زنجیره: CF edge:443 → Origin Rule (پورت ۲۰۸۳) → nginx → استاتیک `/var/www/knowledge-miniapp/` + پراکسی `/api/` → uvicorn 127.0.0.1:8010
@@ -161,7 +166,7 @@ cd /root/MAPNAMD1-knowledge && git pull && rsync -a --delete webapp/static/ /var
 
 ---
 
-## ۷. ساختار فایل‌ها
+## ۹. ساختار فایل‌ها
 
 ```
 MAPNAMD1-knowledge/
@@ -173,7 +178,10 @@ MAPNAMD1-knowledge/
 ├── engine/              ← موتور هوش مصنوعی و منطق دانش
 ├── handlers/            ← هندلرهای تلگرام
 ├── bale_app/            ← هندلرها و فریم‌ورک بله
+├── webapp/              ← مینی‌اپ وب (FastAPI + SPA)
 ├── utils/               ← ابزارهای کمکی
+├── scripts/             ← اسکریپت‌های کمکی
+├── deploy/              ← کانفیگ nginx و استقرار
 ├── data/                ← [runtime] فایل SQLite (مشترک دو ربات)
 ├── media/               ← [runtime] عکس‌ها و فایل‌ها
 └── logs/                ← [runtime] فایل‌های لاگ
