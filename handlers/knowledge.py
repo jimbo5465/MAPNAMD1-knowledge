@@ -413,15 +413,14 @@ def _org_meta_keyboard(knowledge_type: str, current: dict) -> InlineKeyboardMark
             )
         ])
         # «بذر پیشنهاد» طبق فرم دانا خالی میماند — پرسیده نمیشود
-    if knowledge_type in ("lesson", "explicit"):
-        # پروژه: درسآموخته ⭐ الزامی، دانش صریح اختیاری؛ در فرم پیشنهاد نیست
-        star = "⭐" if knowledge_type == "lesson" else ""
-        rows.append([
-            InlineKeyboardButton(
-                f"🏗 پروژه{star}: {current.get('project_display', 'خالی')}",
-                callback_data="kn_org:project",
-            )
-        ])
+    # پروژه: درسآموخته ⭐ الزامی، بقیه اختیاری — همیشه نمایش داده می‌شود تا کاربر بتواند پروژه ذکرشده در متن را اصلاح کند
+    star = "⭐" if knowledge_type == "lesson" else ""
+    rows.append([
+        InlineKeyboardButton(
+            f"🏗 پروژه{star}: {current.get('project_display', 'خالی')}",
+            callback_data="kn_org:project",
+        )
+    ])
     rows.append([
         InlineKeyboardButton(
             f"🤝 همکاران: {current.get('colleagues_display', 'خالی')}",
@@ -2003,6 +2002,20 @@ async def _final_assemble_and_preview(
                 org["_project_previous"] = current
                 logger.info("پروژه از '%s' (پروفایل) به '%s' (متن) تغییر کرد", current, extracted)
 
+        # همکاران/کمیته: اگر AI در مصاحبه آنها را به‌صورت فیلد استخراج کرده، به org_metadata منتقل کن تا در منو دیده شوند
+        # (FIELD_SCHEMAS colleagues برای suggestion/explicit در fields می‌آید، ولی UI آن را از org_metadata می‌خواند)
+        try:
+            org2 = context.user_data.setdefault("kn_org_metadata", {})
+            if fields.get("colleagues") and not (org2.get("colleagues") or "").strip():
+                org2["colleagues"] = str(fields["colleagues"]).strip()
+                logger.info("همکاران از fields به org_metadata منتقل شد: %s", org2["colleagues"])
+            # اگر AI به‌صورت ضمنی کمیته را در fields یا extracted گذاشته بود
+            for k in ("committee", "colleagues"):
+                if fields.get(k) and not (org2.get(k) or "").strip():
+                    org2[k] = str(fields[k]).strip()
+        except Exception:
+            logger.exception("همگام‌سازی colleagues/committee ناموفق")
+
         # QA سبک غیرمسدودکننده — فقط هشدار، بدون مسدودسازی
         flags: list[str] = []
         try:
@@ -2329,9 +2342,8 @@ def _org_menu_payload(context) -> tuple[str, InlineKeyboardMarkup]:
     text_lines.append(f"  🌳 درخت: {display['tree_display']}")
     if knowledge_type == "suggestion":
         text_lines.append(f"  👥 کمیته: {display['committee_display']}")
-    if knowledge_type in ("lesson", "explicit"):
-        star = " ⭐" if knowledge_type == "lesson" else ""
-        text_lines.append(f"  🏗 پروژه{star}: {display['project_display']}")
+    star = " ⭐" if knowledge_type == "lesson" else ""
+    text_lines.append(f"  🏗 پروژه{star}: {display['project_display']}")
     text_lines.append(f"  🤝 همکاران: {display['colleagues_display']}")
     text_lines.append(f"  #️⃣ هشتگها: {display['hashtags_display']}")
     if knowledge_type in ("lesson", "explicit"):
