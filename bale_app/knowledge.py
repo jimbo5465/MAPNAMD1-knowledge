@@ -1996,17 +1996,19 @@ async def _final_assemble_and_preview(
                 org["_project_previous"] = current
                 logger.info("پروژه از '%s' (پروفایل) به '%s' (متن) تغییر کرد", current, extracted)
 
-        # همکاران/کمیته: اگر AI در مصاحبه آنها را به‌صورت فیلد استخراج کرده، به org_metadata منتقل کن تا در منو دیده شوند
-        # (FIELD_SCHEMAS colleagues برای suggestion/explicit در fields می‌آید، ولی UI آن را از org_metadata می‌خواند)
+        # همکاران: اول از polish (extracted_colleagues)، سپس از fields — تا حتی برای lesson هم پر شود
         try:
             org2 = context.user_data.setdefault("kn_org_metadata", {})
-            if fields.get("colleagues") and not (org2.get("colleagues") or "").strip():
+            # polish اولویت دارد (دقیق‌تر و صریح)
+            if polish.get("extracted_colleagues") and not (org2.get("colleagues") or "").strip():
+                org2["colleagues"] = str(polish["extracted_colleagues"]).strip()
+                logger.info("همکاران از polish به org_metadata منتقل شد: %s", org2["colleagues"])
+            elif fields.get("colleagues") and not (org2.get("colleagues") or "").strip():
                 org2["colleagues"] = str(fields["colleagues"]).strip()
                 logger.info("همکاران از fields به org_metadata منتقل شد: %s", org2["colleagues"])
-            # اگر AI به‌صورت ضمنی کمیته را در fields یا extracted گذاشته بود
-            for k in ("committee", "colleagues"):
-                if fields.get(k) and not (org2.get(k) or "").strip():
-                    org2[k] = str(fields[k]).strip()
+            # کمیته اگر AI در fields گذاشته بود
+            if fields.get("committee") and not (org2.get("committee") or "").strip():
+                org2["committee"] = str(fields["committee"]).strip()
         except Exception:
             logger.exception("همگام‌سازی colleagues/committee ناموفق")
 

@@ -201,8 +201,11 @@ def build_polish_system_prompt() -> str:
    دقیقاً همان نام ذکرشده را استخراج کن — اولویت با متن است، نه پروفایل.
    مثال: «در نیروگاه پرند تجربه شد» → extracted_project = «نیروگاه پرند»
    اگر هیچ نامی ذکر نشده، null بگذار (حدس نزن).
-3. تا ۵ هشتگ مرتبط (فارسی، بدون #) پیشنهاد بده.
-4. اگر عنوان فعلی ضعیف یا نامفهوم است، پیشنهاد بهتر بده.
+3. اگر نام همکاران درگیر ذکر شده (الگو: «با همکاری آقای ... و ...»، «با آقای ... تهیه شد»،
+   «همکاران: ...»)، آنها را به‌صورت رشته با کاما جدا استخراج کن — حتی برای درس‌آموخته.
+   اگر نامی نیست، null بگذار. مثال: «با همکاری آقای رضا احمدی، محسن میراحمدی و هوشنگ مرادی» → extracted_colleagues = «رضا احمدی، محسن میراحمدی، هوشنگ مرادی»
+4. تا ۵ هشتگ مرتبط (فارسی، بدون #) پیشنهاد بده — از روی محتوای واقعی بساز، حتی اگر متن کوتاه است.
+5. اگر عنوان فعلی ضعیف یا نامفهوم است، پیشنهاد بهتر بده.
 
 خروجی JSON خالص (فقط کلیدهای مربوط به همین نوع دانش + کلیدهای مشترک):
 {
@@ -210,6 +213,7 @@ def build_polish_system_prompt() -> str:
   "polished_current_state": "<فقط پیشنهاد یا null>",
   "polished_proposal": "<فقط پیشنهاد یا null>",
   "extracted_project": "<نام پروژه یا null>",
+  "extracted_colleagues": "<نام همکاران با کاما یا null>",
   "hashtags": ["برچسب۱", "برچسب۲", ...],
   "title_suggestion": "<پیشنهاد عنوان بهتر یا null>"
 }
@@ -427,6 +431,7 @@ async def polish_dana_draft(
         "polished_current_state": None,
         "polished_proposal": None,
         "extracted_project": project_name,
+        "extracted_colleagues": None,
         "hashtags": None,
         "title_suggestion": None,
     }
@@ -467,6 +472,9 @@ async def polish_dana_draft(
     ep = parsed.get("extracted_project")
     if isinstance(ep, str) and ep.strip():
         result["extracted_project"] = ep.strip()
+    ec = parsed.get("extracted_colleagues")
+    if isinstance(ec, str) and ec.strip():
+        result["extracted_colleagues"] = ec.strip()
     ht = parsed.get("hashtags")
     if isinstance(ht, list):
         tags = [str(h).strip().lstrip("#") for h in ht if str(h).strip()]
